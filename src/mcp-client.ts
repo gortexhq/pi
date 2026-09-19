@@ -18,6 +18,33 @@ export const MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 export const CLIENT_NAME = "pi";
 export const CLIENT_VERSION = "1.0.0";
 export const WIRE_FORMATS: string[] = ["gcx"];
+export const PROTOCOL_VERSION = "2025-06-18";
+
+// Floor for the daemon. gortex v0.61.2 is where `gortex mcp` first served the
+// persistent bridge this client dials; older daemons expose a fixed tool facade
+// with nothing on the other end of the handshake.
+export const MIN_GORTEX_VERSION = "0.61.2";
+
+/**
+ * Dotted-numeric comparison, prerelease and build suffixes ignored, since the
+ * daemon reports "0.64.4" while its CLI prints "v0.64.4+2b5480bf". Unparseable
+ * segments count as 0, so a version this cannot read never trips the warning.
+ */
+export function isBelowVersion(actual: string, floor: string): boolean {
+  const parse = (v: string): number[] =>
+    v
+      .replace(/^v/, "")
+      .split(/[+-]/)[0]!
+      .split(".")
+      .map((part) => Number.parseInt(part, 10) || 0);
+  const a = parse(actual);
+  const b = parse(floor);
+  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+    const delta = (a[i] ?? 0) - (b[i] ?? 0);
+    if (delta !== 0) return delta < 0;
+  }
+  return false;
+}
 
 // Presets the proxy has to be told about. The daemon's own default surface
 // already IS core/defer, so those pass nothing. Anything unrecognised (a typo,
@@ -96,6 +123,11 @@ export class MCPStdioClient {
 
   // Fired on notifications/tools/list_changed (server-side promotion).
   onToolsListChanged: (() => void) | null = null;
+
+  // Read off the handshake reply. Empty when the daemon withheld the field,
+  // which reads as "unknown" everywhere and never as a mismatch.
+  serverVersion = "";
+  negotiatedProtocol = "";
 
   constructor(options: MCPStdioClientOptions) {
     this.bin = options.bin;
@@ -255,15 +287,19 @@ export class MCPStdioClient {
   }
 
   private async initialize(): Promise<void> {
-    await this.request(
+    const result = (await this.request(
       "initialize",
       {
-        protocolVersion: "2025-06-18",
+        protocolVersion: PROTOCOL_VERSION,
         capabilities: { experimental: { "gortex/wire": WIRE_FORMATS } },
         clientInfo: { name: CLIENT_NAME, version: CLIENT_VERSION },
       },
       INIT_TIMEOUT_MS,
-    );
+    )) as { protocolVersion?: unknown; serverInfo?: { version?: unknown } } | null;
+    const version = result?.serverInfo?.version;
+    this.serverVersion = typeof version === "string" ? version : "";
+    this.negotiatedProtocol =
+      typeof result?.protocolVersion === "string" ? result.protocolVersion : "";
     this.notify("notifications/initialized", {});
   }
 

@@ -19,6 +19,11 @@ implementation forwards the call down that channel.
   wire formats it can decode, so list-shaped results arrive compact without the
   daemon needing a per-client allowlist entry. One retry after a short backoff
   absorbs a daemon that is still warming up.
+- **Version skew.** The handshake reply carries `serverInfo.version` and the
+  protocol the daemon settled on. A daemon below the supported floor, or one
+  answering a protocol this client does not speak, warns the user through Pi's
+  warning channel and tells the model a tool may misbehave. Advisory only: the
+  session keeps every tool it registered.
 - **Registration.** The daemon's eager tool surface is registered up front, each
   MCP input schema passed through verbatim as the Pi tool's parameters, so the
   model reads the daemon's own parameter documentation.

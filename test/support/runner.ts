@@ -27,6 +27,7 @@ import type {
   Extension,
   ExtensionActions,
   ExtensionContextActions,
+  ExtensionUIContext,
   ExtensionError,
   ExtensionRuntime,
   RegisteredTool,
@@ -50,6 +51,11 @@ export interface ContextMessage {
   content: string;
 }
 
+export interface Notification {
+  message: string;
+  type: string | undefined;
+}
+
 export interface Harness {
   runner: ExtensionRunner;
   /** Messages the extension pushed through ExtensionActions.sendMessage. */
@@ -68,6 +74,8 @@ export interface Harness {
   tool(name: string): RegisteredTool["definition"] | undefined;
   /** The files Pi loaded this extension from. */
   extensionPaths(): string[];
+  /** Everything the extension pushed at the user through ctx.ui.notify. */
+  notifications: Notification[];
 }
 
 // Only the members this extension touches are implemented; the rest stay
@@ -162,11 +170,22 @@ function buildHarness(extensions: Extension[], runtime: ExtensionRuntime, cwd: s
   runner.onError((err) => errors.push(err));
   runner.bindCore(extensionActions(sent), extensionContextActions());
 
+  // Without a UI context the runner reports hasUI false, so the extension's
+  // user-facing warnings would be skipped rather than asserted on.
+  const notifications: Notification[] = [];
+  const ui: Partial<ExtensionUIContext> = {
+    notify: (message: string, type?: string) => {
+      notifications.push({ message, type });
+    },
+  };
+  runner.setUIContext(ui as ExtensionUIContext, "tui");
+
   return {
     runner,
     sent,
     errors,
     cwd,
+    notifications,
     sessionStart(reason = "startup") {
       return runner.emit({ type: "session_start", reason } as Parameters<ExtensionRunner["emit"]>[0]);
     },

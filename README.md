@@ -32,10 +32,11 @@ See [docs/architecture.md](docs/architecture.md) for how it works.
 ## Requirements
 
 - **Node 24+**, **Pi 0.85+**
-- **The `gortex` binary** on `PATH`. See
+- **The `gortex` binary** on `PATH`, **v0.61.2 or newer**. See
   [Gortex installation](https://github.com/zzet/gortex/blob/main/docs/installation.md).
   The extension starts the shared daemon itself and never blocks Pi's startup
-  on it.
+  on it, and warns you at session start when the binary is older than that.
+  Run `gortex upgrade` to fix it.
 
 ## Install
 

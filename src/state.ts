@@ -18,6 +18,13 @@ let client: MCPStdioClient | null = null;
 let bridgeError = "";
 
 /**
+ * How the daemon is out of step with this extension (empty when it is not).
+ * Surfaced once to the model alongside the orientation; the user learns about
+ * it through ctx.ui.notify at session_start, which never reaches the model.
+ */
+let versionWarning = "";
+
+/**
  * Names the Gortex tools are registered under in Pi. Usually the bare daemon
  * name, except for a few aliased to dodge Pi's built-ins (see piAliasName).
  * Tracks the post-alias name.
@@ -38,4 +45,12 @@ export function getBridgeError(): string {
 
 export function setBridgeError(message: string): void {
   bridgeError = message;
+}
+
+export function getVersionWarning(): string {
+  return versionWarning;
+}
+
+export function setVersionWarning(message: string): void {
+  versionWarning = message;
 }

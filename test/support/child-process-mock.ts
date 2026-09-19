@@ -26,6 +26,8 @@ export interface Control {
   hookDecision: Record<string, unknown>;
   failFirstInitialize: boolean;
   holdNextChild: boolean;
+  serverVersion: string | null;
+  protocolVersion: string;
   spawns: SpawnRecord[];
   hookCalls: HookCall[];
   children: FakeChild[];
@@ -43,6 +45,11 @@ export const control: Control = {
   hookDecision: {} as Record<string, unknown>,
   // Make the first initialize fail, to exercise start()'s single retry.
   failFirstInitialize: false,
+  // serverInfo.version in the handshake reply; null withholds serverInfo
+  // entirely, the way a daemon that predates the field would.
+  serverVersion: "0.64.4" as string | null,
+  // protocolVersion the daemon answers with, which need not be ours.
+  protocolVersion: "2025-06-18",
   // Withhold the next spawned child's replies until releaseReplies(). A gate
   // lets a suite hold registration open for as long as it needs without
   // asserting on wall-clock latency.
@@ -60,6 +67,8 @@ export const control: Control = {
     this.hookDecision = {};
     this.failFirstInitialize = false;
     this.holdNextChild = false;
+    this.serverVersion = "0.64.4";
+    this.protocolVersion = "2025-06-18";
     this.spawns = [];
     this.hookCalls = [];
     this.children = [];
@@ -128,10 +137,14 @@ export class FakeChild extends EventEmitter {
         );
         return true;
       }
-      this.reply(
-        { jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2025-06-18", capabilities: {} } },
-        control.handshakeDelayMs,
-      );
+      const result: Record<string, unknown> = {
+        protocolVersion: control.protocolVersion,
+        capabilities: {},
+      };
+      if (control.serverVersion !== null) {
+        result["serverInfo"] = { name: "gortex", version: control.serverVersion };
+      }
+      this.reply({ jsonrpc: "2.0", id: msg.id, result }, control.handshakeDelayMs);
       return true;
     }
 

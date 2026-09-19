@@ -13,7 +13,13 @@ import type {
 import { resolveConfig } from "./config.ts";
 import type { GortexConfig } from "./config.ts";
 import { callHook, normalizeToolCall } from "./hook.ts";
-import { MCPStdioClient, ensureDaemon } from "./mcp-client.ts";
+import {
+  MCPStdioClient,
+  MIN_GORTEX_VERSION,
+  PROTOCOL_VERSION,
+  ensureDaemon,
+  isBelowVersion,
+} from "./mcp-client.ts";
 import { nodeProcessDeps } from "./runtime.ts";
 import type { ProcessDeps } from "./runtime.ts";
 import {
@@ -24,9 +30,11 @@ import {
 import {
   getBridgeError,
   getClient,
+  getVersionWarning,
   gortexToolNames,
   setBridgeError,
   setClient,
+  setVersionWarning,
 } from "./state.ts";
 
 export type { GortexConfig, SidecarConfig } from "./config.ts";
@@ -39,6 +47,49 @@ export type { GortexConfig, SidecarConfig } from "./config.ts";
  * seconds; start() alone can take ~2 min.
  */
 export const READY_WAIT_MS = 15_000;
+
+/**
+ * Compares the daemon against what this extension is built for and, on a skew,
+ * tells both audiences: the user through Pi's warning channel (which never
+ * enters model context), the model through the orientation, so it knows a tool
+ * may misbehave. Advisory only: the session keeps every tool it registered,
+ * matching the fail-open posture in docs/architecture.md.
+ */
+function reportVersionSkew(
+  ctx: ExtensionContext | undefined,
+  serverVersion: string,
+  negotiatedProtocol: string,
+): void {
+  const stale = serverVersion !== "" && isBelowVersion(serverVersion, MIN_GORTEX_VERSION);
+  const protocolSkew = negotiatedProtocol !== "" && negotiatedProtocol !== PROTOCOL_VERSION;
+  if (!stale && !protocolSkew) return;
+
+  const installed = serverVersion === "" ? "an unreported version" : `gortex ${serverVersion}`;
+  const user = stale
+    ? `${installed} is older than ${MIN_GORTEX_VERSION}, which this extension needs. ` +
+      `Graph tools and read discipline may be missing or wrong. Run \`gortex upgrade\`.`
+    : `${installed} answered the handshake with MCP protocol ${negotiatedProtocol}, ` +
+      `not the ${PROTOCOL_VERSION} this extension speaks. Tool calls may fail. ` +
+      `Run \`gortex upgrade\`.`;
+
+  setVersionWarning(
+    stale
+      ? `[Gortex] the daemon is ${installed}, older than the ${MIN_GORTEX_VERSION} this ` +
+        `extension targets. A graph tool may be missing or behave unexpectedly. If one ` +
+        `does, tell the user to run \`gortex upgrade\`.`
+      : `[Gortex] the daemon negotiated MCP protocol ${negotiatedProtocol} instead of ` +
+        `${PROTOCOL_VERSION}. A graph tool call may fail. If one does, tell the user to ` +
+        `run \`gortex upgrade\`.`,
+  );
+
+  // A Pi build without a UI (print/JSON mode) or without notify must not take
+  // the session down over an advisory message.
+  try {
+    if (ctx?.hasUI) ctx.ui.notify(user, "warning");
+  } catch {
+    // the model still gets the orientation line above
+  }
+}
 
 /** Test seams. Pi itself calls the factory with the `pi` object alone. */
 export interface GortexExtensionOptions {
@@ -111,14 +162,15 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
   // (re)register here. Clear the name guard first, since it persists across
   // sessions and would otherwise suppress re-registration. The previous
   // session's bridge child (if any) is stopped before a fresh handshake.
-  pi.on("session_start", async () => {
+  pi.on("session_start", async (_event, ctx) => {
     orientationInjected = false;
     pendingOrientation = "";
     setBridgeError("");
+    setVersionWarning("");
     armSessionReady(); // no-op when a turn is already parked on this session
     const settle = settleSessionReady; // this invocation's resolver
     try {
-      await startSession();
+      await startSession(ctx);
     } finally {
       settle();
     }
@@ -126,7 +178,7 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
 
   // startSession holds the body of session_start so the readiness promise
   // above settles on every exit path, early returns included.
-  async function startSession(): Promise<void> {
+  async function startSession(ctx?: ExtensionContext): Promise<void> {
     ensureDaemon(config.bin, deps);
     gortexToolNames.clear();
     clearSyncTimer();
@@ -143,6 +195,7 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
     try {
       await c.start();
       if (getClient() !== c) return; // superseded while handshaking
+      reportVersionSkew(ctx, c.serverVersion, c.negotiatedProtocol);
       c.onToolsListChanged = () => {
         scheduleSyncTools(pi);
       };
@@ -188,6 +241,11 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
         `user to retry, or to run /reload if it stays missing. Don't fall back to ` +
         `native tools.`,
       );
+    }
+    const versionWarning = getVersionWarning();
+    if (versionWarning) {
+      parts.push(versionWarning);
+      setVersionWarning("");
     }
     if (decision.orientation) parts.push(decision.orientation);
     if (parts.length > 0) {
