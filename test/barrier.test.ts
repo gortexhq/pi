@@ -143,3 +143,34 @@ describe("a prompt submitted in the /reload gap", () => {
     assert.ok(injected2[0]!.content.includes(ORIENTATION));
   });
 });
+
+// The hook carries a session_start event, so it must be shelled once per
+// session. It is execFileSync, which blocks Pi's event loop while it runs.
+describe("a healthy session whose hook returns nothing to inject", () => {
+  let harness: Harness;
+  let injected: ContextMessage[];
+
+  before(async () => {
+    resetInitializeAttempts();
+    control.reset({ tools: TOOLS, hookDecision: {} });
+
+    harness = await createHarness(await loadFactory(3), options());
+    await harness.sessionStart();
+    await harness.turn();
+    injected = await harness.context();
+    await harness.turn();
+    await harness.turn();
+  });
+
+  it("registers the aliased tools, so nothing reaches the orientation", () => {
+    assert.ok(harness.tools().includes("gortex_read"));
+    assert.equal(injected.length, 0);
+  });
+
+  it("still shells the hook only once across three turns", () => {
+    const calls = control.hookCalls.filter((c) =>
+      String(c.input ?? "").includes('"event":"session_start"'),
+    );
+    assert.equal(calls.length, 1, `shelled ${calls.length}x`);
+  });
+});

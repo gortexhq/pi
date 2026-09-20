@@ -110,7 +110,9 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
   const deps = options.deps ?? nodeProcessDeps;
   const readyWaitMs = options.readyWaitMs ?? READY_WAIT_MS;
 
-  let orientationInjected = false;
+  // Latched for the whole session once the first turn has run the
+  // session_start hook, whether or not it produced anything to inject.
+  let startupHookRan = false;
   // Orientation awaiting injection into the next LLM call, computed once per
   // session. The `context` hook appends it as a tail user message, because a
   // systemPrompt change sits at messages[0] and invalidates prefix caching.
@@ -163,7 +165,7 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
   // sessions and would otherwise suppress re-registration. The previous
   // session's bridge child (if any) is stopped before a fresh handshake.
   pi.on("session_start", async (_event, ctx) => {
-    orientationInjected = false;
+    startupHookRan = false;
     pendingOrientation = "";
     setBridgeError("");
     setVersionWarning("");
@@ -215,7 +217,8 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
   // Fires before the agent loop's first LLM call. It can't mutate messages
   // itself, so it just parks the orientation for the `context` hook.
   pi.on("before_agent_start", async () => {
-    if (orientationInjected) return;
+    if (startupHookRan) return;
+    startupHookRan = true; // before the first await, so a second turn can't race in
     // Pi awaits each listener, so this holds the turn until the tools are
     // registered and bridgeError reflects the handshake (or the cap expires).
     const ready = await waitForSession(readyWaitMs);
@@ -233,7 +236,7 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
       setBridgeError("");
     } else if (!ready) {
       // Cap expired mid-handshake: bridgeError is still empty, and this is the
-      // only turn that reports it: orientationInjected latches below, so a
+      // only turn that reports it: startupHookRan latches above, so a
       // handshake that fails after the cap never reaches the branch above.
       parts.push(
         `[Gortex] graph tools were still registering when this turn began, so a tool ` +
@@ -248,10 +251,7 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
       setVersionWarning("");
     }
     if (decision.orientation) parts.push(decision.orientation);
-    if (parts.length > 0) {
-      pendingOrientation = parts.join("\n\n");
-      orientationInjected = true;
-    }
+    if (parts.length > 0) pendingOrientation = parts.join("\n\n");
     return;
   });
 
