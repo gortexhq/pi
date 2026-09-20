@@ -1,0 +1,63 @@
+{
+  "name": "pi-gortex",
+  "version": "0.1.0",
+  "description": "Gortex for Pi: high-performance code-intelligence engine for AI agents, based on graph. Exposes only the information the agent needs, cutting token usage up to 50x. 100% local.",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "gortex",
+    "mcp",
+    "code-graph"
+  ],
+  "homepage": "https://github.com/gortexhq/pi#readme",
+  "bugs": {
+    "url": "https://github.com/gortexhq/pi/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gortexhq/pi.git"
+  },
+  "license": "Apache-2.0",
+  "files": [
+    "index.ts",
+    "src/",
+    "docs/",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "main": "./index.ts",
+  "scripts": {
+    "test": "node --test \"test/*.test.ts\"",
+    "test:watch": "node --test --watch \"test/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test",
+    "prepublishOnly": "npm run check"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "~0.85.1",
+    "@types/node": "^26.4.1",
+    "typescript": "^7.0.2"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "image": "https://raw.githubusercontent.com/zzet/gortex/main/assets/wall.png"
+  }
+}
