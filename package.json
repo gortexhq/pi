@@ -1,6 +1,6 @@
 {
   "name": "pi-gortex",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Gortex for Pi: high-performance code-intelligence engine for AI agents, based on graph. Exposes only the information the agent needs, cutting token usage up to 50x. 100% local.",
   "keywords": [
     "pi-package",
