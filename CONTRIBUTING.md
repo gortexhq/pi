@@ -124,7 +124,9 @@ Commit subjects follow [Conventional Commits](https://www.conventionalcommits.or
 
 Maintainers bump `version` in `package.json` and push a matching `v*` tag.
 [`release.yml`](.github/workflows/release.yml) verifies the tag, runs the
-checks, publishes to npm with provenance and creates the GitHub release. Release
+checks, publishes to npm with provenance and creates the GitHub release. It
+publishes through npm trusted publishing from the `pi-gortex-release`
+environment, so no npm token is stored in the repository. Release
 notes are generated from merged PR labels, grouped per
 [`.github/release.yml`](.github/release.yml). Both steps skip what already
 exists, so a failed run can be re-run from the tag.
