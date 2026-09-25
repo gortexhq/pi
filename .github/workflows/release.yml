@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
 
     permissions:
-      contents: read
+      contents: write
       id-token: write
 
     steps:
@@ -39,6 +39,26 @@ jobs:
 
       - run: npm run check
 
-      - run: npm publish --provenance --access public
+      - name: Publish to npm
+        run: |
+          set -euo pipefail
+          SPEC="$(node -p 'const p = require("./package.json"); `${p.name}@${p.version}`')"
+          if npm view "$SPEC" version >/dev/null 2>&1; then
+            echo "$SPEC is already on npm, skipping publish"
+          else
+            npm publish --provenance --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub release
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF#refs/tags/}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists"
+          else
+            gh release create "$TAG" --verify-tag --generate-notes
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
