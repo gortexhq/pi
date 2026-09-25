@@ -1,9 +1,8 @@
 // Tool registration: each tool the bridge lists becomes a native Pi tool whose
 // execute() forwards to tools/call.
 
-import { createRequire } from "node:module";
-
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 
 import { textFromResult } from "./mcp-client.ts";
 import type { ToolDescriptor } from "./mcp-client.ts";
@@ -67,20 +66,6 @@ export function safeRegister(pi: ExtensionAPI, def: BridgeToolDefinition): strin
   return def.name;
 }
 
-// Lazily resolved TUI Text component, used only to collapse a gortex tool's
-// result to nothing until the user expands it (ctrl+o). Resolved through
-// createRequire rather than a static import so a Pi packaging that can't
-// provide @earendil-works/pi-tui degrades to Pi's default renderer instead of
-// throwing at load and taking tool registration down with it.
-type TextComponent = new (text: string, x: number, y: number) => unknown;
-let TuiText: TextComponent | undefined;
-try {
-  const require = createRequire(import.meta.url);
-  TuiText = (require("@earendil-works/pi-tui") as { Text: TextComponent }).Text;
-} catch {
-  TuiText = undefined;
-}
-
 function resultText(result: unknown): string {
   const structured = (result as { structuredContent?: unknown })?.structuredContent;
   return textFromResult(result) || JSON.stringify(structured ?? result ?? {});
@@ -128,13 +113,10 @@ export function registerOneTool(pi: ExtensionAPI, desc: ToolDescriptor): void {
       return { content: [{ type: "text", text }], details: {} };
     },
   };
-  if (TuiText) {
-    const Text = TuiText;
-    def.renderResult = (result: unknown, options: { expanded?: boolean }) => {
-      if (!options?.expanded) return new Text("", 0, 0);
-      return new Text(resultText(result), 0, 0);
-    };
-  }
+  def.renderResult = (result: unknown, options: { expanded?: boolean }) => {
+    if (!options?.expanded) return new Text("", 0, 0);
+    return new Text(resultText(result), 0, 0);
+  };
   gortexToolNames.add(safeRegister(pi, def));
 }
 
