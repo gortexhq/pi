@@ -60,6 +60,16 @@ describe("a tool whose name collides with a Pi builtin", () => {
     )) as { content: { type: string; text: string }[] };
     assert.equal(result.content[0]!.text, "ok");
   });
+
+  it("collapses its result until the user expands it", () => {
+    const render = harness.tool("search")!.renderResult as unknown as (
+      result: unknown,
+      options: { expanded: boolean },
+    ) => { render(width: number): string[] };
+    const result = { content: [{ type: "text", text: "ok" }] };
+    assert.equal(render(result, { expanded: false }).render(80).join("").trim(), "");
+    assert.equal(render(result, { expanded: true }).render(80).join("").trim(), "ok");
+  });
 });
 
 describe("a tool whose name does not collide", () => {
