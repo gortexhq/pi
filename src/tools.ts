@@ -2,10 +2,10 @@
 // execute() forwards to tools/call.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
 
-import { textFromResult } from "./mcp-client.ts";
 import type { ToolDescriptor } from "./mcp-client.ts";
+import { callRenderer, readCallRenderer, renderResult, resultText } from "./render.ts";
+import type { RenderCall, RenderResult } from "./render.ts";
 import { getClient, gortexToolNames } from "./state.ts";
 import { toolNameMap } from "./hook.ts";
 
@@ -45,7 +45,8 @@ interface BridgeToolDefinition {
   description: string;
   parameters: unknown;
   execute(toolCallId: string, params: Record<string, unknown>): Promise<unknown>;
-  renderResult?: (result: unknown, options: { expanded?: boolean }) => unknown;
+  renderCall: RenderCall;
+  renderResult: RenderResult;
 }
 
 /**
@@ -66,19 +67,11 @@ export function safeRegister(pi: ExtensionAPI, def: BridgeToolDefinition): strin
   return def.name;
 }
 
-function resultText(result: unknown): string {
-  const structured = (result as { structuredContent?: unknown })?.structuredContent;
-  return textFromResult(result) || JSON.stringify(structured ?? result ?? {});
-}
-
 /**
  * Registers one Gortex tool under its bare daemon name (or its alias).
  * Idempotent: a name already registered is skipped. Adds the name to
  * gortexToolNames so the read-discipline postures treat a call to it as a graph
  * query.
- *
- * renderResult collapses the result to nothing until the user expands it with
- * ctrl+o; Pi's fallback renderCall already shows the tool name.
  */
 export function registerOneTool(pi: ExtensionAPI, desc: ToolDescriptor): void {
   const name = desc.name;
@@ -112,10 +105,8 @@ export function registerOneTool(pi: ExtensionAPI, desc: ToolDescriptor): void {
       if ((result as { isError?: boolean })?.isError) throw new Error(text || `gortex ${name} failed`);
       return { content: [{ type: "text", text }], details: {} };
     },
-  };
-  def.renderResult = (result: unknown, options: { expanded?: boolean }) => {
-    if (!options?.expanded) return new Text("", 0, 0);
-    return new Text(resultText(result), 0, 0);
+    renderCall: (name === "read" ? readCallRenderer : callRenderer)(piAliasName(name)),
+    renderResult,
   };
   gortexToolNames.add(safeRegister(pi, def));
 }

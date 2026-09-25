@@ -85,8 +85,10 @@ green Linux run alone is not enough.
 ## Ground rules
 
 - **Zero runtime dependencies.** The package also loads as a bare directory
-  extension with no `node_modules`, so `dependencies` stays empty. Pi's types
-  are imported with `import type` and erased.
+  extension with no `node_modules`, so `dependencies` stays empty. Pi's
+  packages are imported freely and kept in `devDependencies`: Pi's extension
+  loader resolves them to the running Pi. A Pi bump that breaks an import
+  fails CI on the bump's own PR.
 - **Erasable TypeScript only.** No enums, namespaces or parameter properties,
   and relative imports carry their real `.ts` extension. `tsconfig.json`
   enforces this.

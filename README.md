@@ -88,7 +88,8 @@ npm run typecheck
 npm run check    # both
 ```
 
-Zero runtime dependencies. Pi's types are imported as types only and erased, so
+Zero runtime dependencies. Pi's extension loader resolves Pi's own packages to
+the running Pi, so they are imported freely and kept in `devDependencies`, and
 the package also loads as a bare directory extension with no `node_modules`
 beside it.
 
