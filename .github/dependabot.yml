@@ -1,0 +1,32 @@
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: ci
+    labels: [dependencies]
+    groups:
+      actions-minor-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: deps
+    labels: [dependencies]
+    groups:
+      # Pi's packages share one version line and must move together.
+      pi:
+        patterns: ["@earendil-works/*"]
+      dev-minor-patch:
+        patterns: ["*"]
+        exclude-patterns: ["@earendil-works/*"]
+        update-types: [minor, patch]

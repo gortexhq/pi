@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Gortex engine bug or feature
+    url: https://github.com/zzet/gortex/issues/new/choose
+    about: Wrong tool results, hook decisions, indexing, daemon or language support.
+  - name: Security vulnerability
+    url: https://github.com/gortexhq/pi/security/advisories/new
+    about: Report privately, never in a public issue.
+  - name: Questions and discussion
+    url: https://discord.gg/39MFHu3J5d
+    about: Ask on the Gortex Discord.

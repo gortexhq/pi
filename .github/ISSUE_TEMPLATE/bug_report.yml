@@ -1,0 +1,98 @@
+name: Bug report
+description: Something in the Pi extension does not work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This tracker is for the Pi extension. If the same problem appears with `gortex call <tool>` from a shell, or in another agent, please report it to [zzet/gortex](https://github.com/zzet/gortex/issues) instead.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened
+      description: A clear description of the bug, including any error or warning Pi showed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start `pi` in a repository tracked by gortex
+        2. Ask the agent to ...
+        3. See ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: dropdown
+    id: reload
+    attributes:
+      label: Does `/reload` fix it?
+      options:
+        - "Yes"
+        - "No"
+        - Didn't try
+    validations:
+      required: true
+
+  - type: input
+    id: pi-gortex-version
+    attributes:
+      label: pi-gortex version
+      description: From `pi list`, or the checkout commit for a local install.
+    validations:
+      required: true
+
+  - type: input
+    id: pi-version
+    attributes:
+      label: Pi version
+      description: Output of `pi --version`.
+    validations:
+      required: true
+
+  - type: input
+    id: gortex-version
+    attributes:
+      label: Gortex version
+      description: Output of `gortex version`.
+    validations:
+      required: true
+
+  - type: input
+    id: node-version
+    attributes:
+      label: Node version
+      description: Output of `node --version`.
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: e.g. macOS 26, Ubuntu 24.04, Windows 11
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: Any non-default `hook_mode`, `enforce` or `tools_preset`, from `.pi/gortex.json`, the global sidecar or environment variables.
+      render: json
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and additional context
+      description: Relevant output, screenshots, or anything else that helps.

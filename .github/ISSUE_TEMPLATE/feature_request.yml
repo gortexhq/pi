@@ -1,0 +1,36 @@
+name: Feature request
+description: Suggest an improvement to the Pi extension
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        New graph tools, analyses or language support belong to [zzet/gortex](https://github.com/zzet/gortex/issues). This tracker covers how Gortex is brought into Pi.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what gets in the way?
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What you would like to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contribution
+      options:
+        - label: I'd like to implement this myself
