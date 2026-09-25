@@ -8,10 +8,15 @@
 //
 // No gortex binary exists here, so the bridge fails open, which makes this
 // the failure path's test too.
+//
+// A second load copies the package to a directory with no node_modules above
+// it. The extension imports Pi's packages at runtime, and only Pi's loader
+// resolving them to the running Pi lets that copy load at all.
 
 import { describe, it, before } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -68,6 +73,34 @@ describe("loaded through Pi's own discovery", () => {
   });
 
   it("lets tool calls through rather than blocking on a dead hook", () => {
+    assert.deepEqual(harness.errors, []);
+  });
+});
+
+describe("loaded as a bare directory with no node_modules", () => {
+  let harness: Harness;
+  let bareRoot: string;
+
+  before(async () => {
+    process.env.GORTEX_BIN = path.join(PACKAGE_ROOT, "does-not-exist-gortex");
+    bareRoot = mkdtempSync(path.join(tmpdir(), "pi-gortex-bare-"));
+    for (const entry of ["package.json", "index.ts", "src"]) {
+      cpSync(path.join(PACKAGE_ROOT, entry), path.join(bareRoot, entry), { recursive: true });
+    }
+    // DRIFT FENCE: a node_modules above the copy would resolve Pi's packages
+    // without Pi's loader, and this suite would pass while proving nothing.
+    for (let dir = bareRoot; dir !== path.dirname(dir); dir = path.dirname(dir)) {
+      if (existsSync(path.join(dir, "node_modules"))) {
+        throw new Error(`${dir} has a node_modules, so this load does not isolate Pi's loader; move the copy`);
+      }
+    }
+
+    harness = await createPackagedHarness(bareRoot);
+    await harness.sessionStart();
+  });
+
+  it("resolves Pi's packages through Pi's loader", () => {
+    assert.deepEqual(harness.extensionPaths(), [path.join(bareRoot, "index.ts")]);
     assert.deepEqual(harness.errors, []);
   });
 });

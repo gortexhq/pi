@@ -22,6 +22,7 @@ runs the suites under type stripping.
 | `src/index.ts` | Extension factory and Pi event wiring |
 | `src/mcp-client.ts` | JSON-RPC client over the `gortex mcp` child |
 | `src/tools.ts` | MCP tools to Pi tool registration and promotion |
+| `src/render.ts` | How a bridged tool's call and result render in Pi's TUI |
 | `src/hook.ts` | Bridge to `gortex hook --agent=pi` |
 | `src/config.ts` | Environment and sidecar resolution |
 | `src/runtime.ts` | Injectable process seam (`spawn`, `execFileSync`) |
@@ -31,7 +32,8 @@ runs the suites under type stripping.
 
 ## Rules
 
-- `dependencies` stays empty. Import Pi only with `import type`.
+- `dependencies` stays empty. Pi packages go in `devDependencies` only; import
+  them freely, since Pi's extension loader resolves them to the running Pi.
 - Erasable TypeScript only, and relative imports keep their `.ts` extension.
 - Never write to stdout or stderr from the extension; it corrupts Pi's TUI.
 - Fail open: a missing binary or dead daemon must never break the Pi session.
