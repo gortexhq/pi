@@ -190,7 +190,7 @@ function buildHarness(extensions: Extension[], runtime: ExtensionRuntime, cwd: s
       return runner.emit({ type: "session_start", reason } as Parameters<ExtensionRunner["emit"]>[0]);
     },
     turn(prompt = "go") {
-      return runner.emitBeforeAgentStart(prompt, undefined, "SYSTEM", {} as never);
+      return runner.emitBeforeAgentStart(prompt, undefined, {} as never);
     },
     async context() {
       return (await runner.emitContext([])) as unknown as ContextMessage[];
