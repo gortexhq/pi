@@ -210,6 +210,17 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
     }
   });
 
+  // Stops the live bridge, if any, and clears the slot. Shared by
+  // session_start and session_shutdown so both paths stay in sync.
+  function stopBridge(): void {
+    clearSyncTimer();
+    const previous = getClient();
+    if (previous) {
+      previous.stop();
+      setClient(null);
+    }
+  }
+
   // startSession holds the body of session_start so the readiness promise
   // above settles on every exit path, early returns included.
   async function startSession(ctx?: ExtensionContext): Promise<void> {
@@ -221,12 +232,7 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
     if (nativeRefusal) notifyUser(ctx, `Pi refused the gortex MCP server (${nativeRefusal}), so the extension runs its own client.`);
     ensureDaemon(config.bin, deps);
     gortexToolNames.clear();
-    clearSyncTimer();
-    const previous = getClient();
-    if (previous) {
-      previous.stop();
-      setClient(null);
-    }
+    stopBridge();
     const c = new MCPStdioClient({ bin: config.bin, toolsPreset: config.toolsPreset, deps });
     // Claim the slot before the first await: an overlapping
     // session_start (rapid /new or /reload) then sees and stops THIS
@@ -318,6 +324,11 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
       // best effort; never break context assembly.
     }
     return;
+  });
+
+  // Never let the bridge child outlive the session.
+  pi.on("session_shutdown", async () => {
+    stopBridge();
   });
 
   if (!config.enforce) return;

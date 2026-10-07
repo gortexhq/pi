@@ -3,7 +3,9 @@
 // Shared at module level on purpose: a new invocation's session_start stops the
 // previous invocation's bridge child, which works only while both invocations
 // see the same `client`. Move this into the factory closure and every `/new`
-// leaks a `gortex mcp` process.
+// leaks a `gortex mcp` process. Reload is the exception: Pi re-imports the
+// extension with a fresh module graph, so there the old instance's
+// session_shutdown handler is what stops its bridge.
 
 import type { MCPStdioClient } from "./mcp-client.ts";
 

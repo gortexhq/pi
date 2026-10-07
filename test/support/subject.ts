@@ -1,14 +1,13 @@
 // Loads the extension factory under test, which the harness then hands to
-// Pi's own loader as an inline extension.
-//
-// `generation` stands in for what jiti's moduleCache:false does on /reload: a
-// new generation re-evaluates the module (module-level state in state.ts
-// resets); the same generation reuses it (module-level state is shared,
-// factory re-invocation only). That distinction is load-bearing: a /new must
-// see the previous invocation's bridge in order to stop it.
+// Pi's own loader as an inline extension. jiti runs with moduleCache:false,
+// so every load re-evaluates the module graph the way Pi's /reload
+// re-imports the extension (module-level state in state.ts resets); the
+// memoized factory keeps one shared module state per generation, because a
+// /new must see the previous invocation's bridge in order to stop it.
 
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { createJiti } from "jiti";
+import { fileURLToPath } from "node:url";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -19,11 +18,21 @@ export const INDEX_TS = path.join(HERE, "..", "..", "src", "index.ts");
 
 export type Factory = (pi: ExtensionAPI, options?: GortexExtensionOptions) => void;
 
+const factories = new Map<number, Promise<Factory>>();
+
 export async function loadFactory(generation = 0): Promise<Factory> {
-  const url = pathToFileURL(INDEX_TS).href + `?generation=${generation}`;
-  const mod = (await import(url)) as { default?: unknown };
-  if (typeof mod.default !== "function") {
-    throw new Error("extension source does not default-export a factory function");
+  let factory = factories.get(generation);
+  if (!factory) {
+    factory = createJiti(import.meta.url, { moduleCache: false, fsCache: false })
+      .import(INDEX_TS)
+      .then((value: unknown) => {
+        const mod = value as { default?: unknown };
+        if (typeof mod.default !== "function") {
+          throw new Error("extension source does not default-export a factory function");
+        }
+        return mod.default as Factory;
+      });
+    factories.set(generation, factory);
   }
-  return mod.default as Factory;
+  return factory;
 }

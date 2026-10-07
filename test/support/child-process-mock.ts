@@ -84,11 +84,16 @@ interface Deferred {
 }
 
 export class FakeChild extends EventEmitter {
-  stdout = new EventEmitter();
-  stderr = new EventEmitter();
-  stdin: EventEmitter & { write: (line: string) => unknown } = Object.assign(new EventEmitter(), {
-    write: (line: string) => this.onWrite(line),
-  });
+  unrefCounts = { child: 0, stdin: 0, stdout: 0, stderr: 0 };
+  stdout = Object.assign(new EventEmitter(), { unref: () => this.bumpUnref("stdout") });
+  stderr = Object.assign(new EventEmitter(), { unref: () => this.bumpUnref("stderr") });
+  stdin: EventEmitter & { write: (line: string) => unknown; unref: () => void } = Object.assign(
+    new EventEmitter(),
+    {
+      write: (line: string) => this.onWrite(line),
+      unref: () => this.bumpUnref("stdin"),
+    },
+  );
   killed = false;
   exited = false;
   held = false;
@@ -174,7 +179,13 @@ export class FakeChild extends EventEmitter {
     this.emit("exit", 0, null);
   }
 
-  unref(): void {}
+  unref(): void {
+    this.bumpUnref("child");
+  }
+
+  private bumpUnref(part: keyof FakeChild["unrefCounts"]): void {
+    this.unrefCounts[part] += 1;
+  }
 }
 
 export function spawn(bin: string, args: string[] = [], opts?: SpawnOpts): BridgeChild {

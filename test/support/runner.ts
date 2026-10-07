@@ -68,6 +68,8 @@ export interface Harness {
   cwd: string;
   /** session_start, as Pi emits it. */
   sessionStart(reason?: string): Promise<unknown>;
+  /** session_shutdown, as Pi emits it before tearing the extension runtime down. */
+  sessionShutdown(reason?: "quit" | "reload" | "new" | "resume" | "fork"): Promise<unknown>;
   /** before_agent_start: the turn the readiness barrier holds. */
   turn(prompt?: string): Promise<unknown>;
   /** One context assembly pass; returns the messages the extension appended. */
@@ -197,6 +199,9 @@ function buildHarness(extensions: Extension[], runtime: ExtensionRuntime, cwd: s
     notifications,
     sessionStart(reason = "startup") {
       return runner.emit({ type: "session_start", reason } as Parameters<ExtensionRunner["emit"]>[0]);
+    },
+    sessionShutdown(reason: "quit" | "reload" | "new" | "resume" | "fork" = "quit") {
+      return runner.emit({ type: "session_shutdown", reason } as Parameters<ExtensionRunner["emit"]>[0]);
     },
     turn(prompt = "go") {
       return runner.emitBeforeAgentStart(prompt, undefined, {} as never);

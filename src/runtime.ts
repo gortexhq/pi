@@ -8,11 +8,15 @@ import type { SpawnOptions } from "node:child_process";
 
 export interface ChildStream {
   on(event: string, listener: (chunk: unknown) => void): unknown;
+  /** Drops the event-loop reference; I/O keeps working. */
+  unref?(): unknown;
 }
 
 export interface ChildStdin {
   on(event: string, listener: (err: unknown) => void): unknown;
   write(chunk: string): unknown;
+  /** Drops the event-loop reference; I/O keeps working. */
+  unref?(): unknown;
 }
 
 /** The subset of ChildProcess the MCP bridge and the daemon launcher touch. */
