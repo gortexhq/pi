@@ -19,7 +19,7 @@ const SERVER_DESCRIPTION =
   "call chains, change impact and graph-aware edits.";
 
 // Pi 0.87 declares none of the MCP members, so they are read structurally.
-type NativeMcpApi = Pick<ExtensionAPI, "registerMcpServer" | "getAllTools">;
+type NativeMcpApi = Pick<ExtensionAPI, "registerMcpServer" | "unregisterMcpServer" | "getAllTools" | "getCommands">;
 
 export function supportsNativeMcp(pi: ExtensionAPI): boolean {
   return typeof (pi as Partial<NativeMcpApi>).registerMcpServer === "function";
@@ -79,6 +79,30 @@ export function binaryResolves(bin: string, env: Record<string, string | undefin
  */
 export function daemonVersionFromBriefing(briefing: string): string {
   return /Gortex daemon [^(\n]*\(v(\d[^,\s)]*)/.exec(briefing)?.[1] ?? "";
+}
+
+/**
+ * Whether an extension that connects MCP servers is loaded. Pi's own MCP
+ * extension and the ones that replace it register `/mcp`; `--no-mcp` and
+ * `-ne` without `builtin:mcp` leave a registration with nothing to connect it.
+ * Read on session_start, once every extension has loaded. A Pi that cannot
+ * list commands is trusted to connect the server.
+ */
+export function mcpConnectorLoaded(pi: ExtensionAPI): boolean {
+  try {
+    return (pi as NativeMcpApi).getCommands().some((command) => command.name === "mcp");
+  } catch {
+    return true;
+  }
+}
+
+/** Withdraws the registration, which also keeps Pi from reporting it as unconnected. */
+export function unregisterNativeServer(pi: ExtensionAPI): void {
+  try {
+    (pi as NativeMcpApi).unregisterMcpServer(MCP_SERVER_NAME);
+  } catch {
+    // already gone, or this instance has been invalidated
+  }
 }
 
 export function isNativeGortexTool(name: string): boolean {

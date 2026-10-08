@@ -2,8 +2,9 @@
 // and keeps only read discipline and the orientation.
 //
 // Pi's MCP extension is not loaded here, so the gortex tools never connect on
-// their own. A suite that needs them connected registers a stand-in tool under
-// the name Pi would give it.
+// their own. Every native session registers the `/mcp` command that extension
+// would, and a suite that needs the tools connected registers a stand-in tool
+// under the name Pi would give it.
 
 import { describe, it, before } from "node:test";
 import assert from "node:assert/strict";
@@ -46,14 +47,24 @@ function withRegisterMcpServer(gortex: Factory, replacement: unknown): Factory {
   };
 }
 
+/** Stands in for the extension Pi uses to connect MCP servers. */
+function withMcpConnector(gortex: Factory): Factory {
+  return (pi, opts) => {
+    pi.registerCommand("mcp", { description: "Manage MCP servers", handler: async () => {} });
+    gortex(pi, opts);
+  };
+}
+
 async function nativeSession(
   factory?: Factory,
   config = NATIVE_CONFIG,
   orientation = ORIENTATION,
+  connector = true,
 ): Promise<Harness> {
   control.reset({ tools: TOOLS, hookDecision: { orientation } });
+  const gortex = factory ?? (await loadFactory(0));
   const harness = await createHarness(
-    factory ?? (await loadFactory(0)),
+    connector ? withMcpConnector(gortex) : gortex,
     options({ config, nativeReadyWaitMs: 50 }),
   );
   await harness.sessionStart();
@@ -197,6 +208,13 @@ function assertOwnBridge(harness: Harness): void {
 describe("a Pi without built-in MCP", () => {
   it("runs the extension's own bridge with the default config", async () => {
     const harness = await nativeSession(withRegisterMcpServer(await loadFactory(0), undefined));
+    assertOwnBridge(harness);
+  });
+});
+
+describe("a Pi with MCP turned off", () => {
+  it("withdraws the registration and runs the extension's own bridge", async () => {
+    const harness = await nativeSession(undefined, NATIVE_CONFIG, ORIENTATION, false);
     assertOwnBridge(harness);
   });
 });

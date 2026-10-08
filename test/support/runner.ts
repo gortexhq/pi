@@ -32,6 +32,7 @@ import type {
   ExtensionRuntime,
   RegisteredMcpServer,
   RegisteredTool,
+  SlashCommandInfo,
   ToolCallEventResult,
   ToolInfo,
 } from "@earendil-works/pi-coding-agent";
@@ -92,6 +93,8 @@ function extensionActions(sent: unknown[], runner: () => ExtensionRunner): Exten
     },
     getAllTools: () =>
       runner().getAllRegisteredTools().map((t) => ({ name: t.definition.name }) as ToolInfo),
+    getCommands: () =>
+      runner().getRegisteredCommands().map((c) => ({ name: c.invocationName }) as SlashCommandInfo),
   };
   return partial as ExtensionActions;
 }

@@ -26,7 +26,9 @@ import {
   binaryResolves,
   daemonVersionFromBriefing,
   isNativeGortexTool,
+  mcpConnectorLoaded,
   registerNativeServer,
+  unregisterNativeServer,
   supportsNativeMcp,
   waitForNativeTools,
 } from "./native.ts";
@@ -134,7 +136,7 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
   // A binary that does not resolve, or a registration Pi refuses, falls back to
   // the extension's own client, which reports its failure to the model.
   let nativeRefusal = "";
-  const native = ((): boolean => {
+  let native = ((): boolean => {
     if (!config.nativeMcp || !supportsNativeMcp(pi) || !binaryResolves(config.bin)) return false;
     nativeRefusal = registerNativeServer(pi, config);
     return nativeRefusal === "";
@@ -211,6 +213,10 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
   // startSession holds the body of session_start so the readiness promise
   // above settles on every exit path, early returns included.
   async function startSession(ctx?: ExtensionContext): Promise<void> {
+    if (native && !mcpConnectorLoaded(pi)) {
+      unregisterNativeServer(pi);
+      native = false;
+    }
     if (native) return;
     if (nativeRefusal) notifyUser(ctx, `Pi refused the gortex MCP server (${nativeRefusal}), so the extension runs its own client.`);
     ensureDaemon(config.bin, deps);
@@ -253,9 +259,9 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
     startupHookRan = true; // before the first await, so a second turn can't race in
     // Pi awaits each listener, so this holds the turn until the tools are
     // registered and bridgeError reflects the handshake (or the cap expires).
-    const ready = native
-      ? await waitForNativeTools(pi, nativeReadyWaitMs)
-      : await waitForSession(readyWaitMs);
+    // session_start settles `native` first: it falls back when nothing connects MCP.
+    const sessionDone = await waitForSession(readyWaitMs);
+    const ready = native ? await waitForNativeTools(pi, nativeReadyWaitMs) : sessionDone;
     const decision = callHook(config.hookArgv, deps, {
       event: "session_start",
       cwd: ctx?.cwd ?? piCwd(),
