@@ -59,6 +59,8 @@ describe("loaded through Pi's own discovery", () => {
     }
   });
 
+  // A binary that does not resolve keeps the extension's own client, whose
+  // spawn failure is what reaches the model.
   it("reports the unreachable bridge to the model", () => {
     assert.equal(turn1.length, 1);
     assert.match(turn1[0]!.content, /graph tools are unavailable/i);

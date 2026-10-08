@@ -4,20 +4,55 @@ How the bridge is built, and why each piece is shaped the way it is.
 
 ## The problem
 
-Pi has no MCP support, by design; its extension API covers the ground MCP would.
 Gortex speaks MCP and owns a hook protocol that every agent it integrates with
-shares. This extension is the adapter between the two, and it does two separate
-jobs over two separate channels.
+shares. Pi 0.99 added built-in MCP support; earlier Pi has none. This extension
+is the adapter between the two, and it does two separate jobs over two separate
+channels.
 
-## Channel 1: graph tools over an MCP stdio bridge
+## Channel 1 on Pi 0.99+: Pi's built-in MCP
+
+On a Pi that offers `pi.registerMcpServer()`, the extension registers
+`gortex mcp` as a stdio server named `gortex` and leaves the tool channel to Pi.
+Pi spawns and connects the server, registers its tools as `mcp__gortex__<tool>`,
+follows `tools/list_changed`, renders the calls and stops the child on reload
+and quit. `gortex mcp` starts the shared daemon itself, so the extension starts
+nothing.
+
+- **Exposure.** The server is registered with `direct` exposure, so its tools
+  are declared to the model like built-in tools and Pi holds the first prompt
+  until the server connects. Pi's default, codemode, would hand scripts the
+  compact text results to parse.
+- **Timeout.** The per-request timeout matches the tool-call cap of the
+  extension's own client. Pi's default is a minute, short for some analyzers.
+- **Wire format.** Pi's client identifies itself as `pi` and declares no
+  capabilities the extension can extend. The daemon picks the compact format
+  from that client name.
+- **Readiness.** Pi reports neither a connection nor a failure to extensions. The
+  first turn waits briefly beyond Pi's own wait for an `mcp__gortex__` tool to
+  appear, and a binary that does not resolve is caught before registering,
+  because it would otherwise read as a server still connecting.
+- **Version skew.** Pi keeps the handshake to itself, so the daemon version is
+  read from the readiness line of the session briefing and checked against the
+  same floor.
+- **Precedence.** A `gortex` entry in Pi's own `mcp.json` replaces the
+  extension's registration, exposure included.
+
+The extension keeps its own client below when Pi lacks `registerMcpServer`, when
+the binary does not resolve (its spawn failure is what reaches the model), when
+Pi refuses the registration (the user is warned with Pi's reason), and when
+`native_mcp` is off. It also switches to it on session start when no loaded
+extension connects MCP servers, as with `--no-mcp`: it withdraws the
+registration then. Pi's MCP extension and the extensions that replace it
+register the `/mcp` command, which is what the check looks for.
+
+## Channel 1 on older Pi: the extension's own MCP client
 
 One Gortex MCP child process per session, spoken to over newline-delimited
 JSON-RPC on stdio. Every tool the daemon offers becomes a native Pi tool whose
 implementation forwards the call down that channel.
 
-- **Handshake.** The client identifies itself as Pi and advertises which compact
-  wire formats it can decode, so list-shaped results arrive compact without the
-  daemon needing a per-client allowlist entry. One retry after a short backoff
+- **Handshake.** The client identifies itself as Pi, which is the name the
+  daemon picks the compact wire format from. One retry after a short backoff
   absorbs a daemon that is still warming up.
 - **Version skew.** The handshake reply carries `serverInfo.version` and the
   protocol the daemon settled on. A daemon below the supported floor, or one
@@ -64,6 +99,11 @@ own way, while Gortex's classifier switches on canonical tool names and input
 keys. That translation lives on this side of the bridge, so the Go side keeps
 one vocabulary for every agent it serves.
 
+A call to a Gortex tool is flagged as a graph call and sent under the daemon's
+own tool name, which is what the postures key off. It skips the translation, so
+Gortex's `read` never passes for Pi's. On Pi's built-in MCP the same hook also
+sees each tool a codemode script calls.
+
 Postures are resolved by Gortex. Keeping that decision there is what keeps the
 behaviour identical across hosts.
 
@@ -98,9 +138,13 @@ matter:
 If the cap expires first, that turn is told the tools may not be callable yet
 and pointed at a reload. Exactly one turn reports it.
 
+On Pi's built-in MCP the session hook registers nothing, and the turn waits for
+the server's tools instead (see Channel 1 on Pi 0.99+).
+
 ## Session state
 
-The live bridge, the last bridge error and the registered tool names live at
+This applies to the extension's own client; on Pi's built-in MCP, Pi owns the
+child. The live bridge, the last bridge error and the registered tool names live at
 module scope, and that is load bearing. A reload re-imports the module, so the
 state resets with it. A new session, a resume and a fork re-invoke the extension
 factory against the cached module, and the new invocation stops the previous

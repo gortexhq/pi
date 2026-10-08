@@ -30,8 +30,11 @@ import type {
   ExtensionUIContext,
   ExtensionError,
   ExtensionRuntime,
+  RegisteredMcpServer,
   RegisteredTool,
+  SlashCommandInfo,
   ToolCallEventResult,
+  ToolInfo,
 } from "@earendil-works/pi-coding-agent";
 
 import type { GortexExtensionOptions } from "../../src/index.ts";
@@ -74,6 +77,8 @@ export interface Harness {
   tool(name: string): RegisteredTool["definition"] | undefined;
   /** The files Pi loaded this extension from. */
   extensionPaths(): string[];
+  /** MCP servers the extension registered with pi.registerMcpServer(). */
+  mcpServers(): RegisteredMcpServer[];
   /** Everything the extension pushed at the user through ctx.ui.notify. */
   notifications: Notification[];
 }
@@ -81,11 +86,15 @@ export interface Harness {
 // Only the members this extension touches are implemented; the rest stay
 // unwired, which is what pi-mono's own runner tests do. Typing the partial
 // keeps sendMessage checked against Pi's real SendMessageHandler.
-function extensionActions(sent: unknown[]): ExtensionActions {
+function extensionActions(sent: unknown[], runner: () => ExtensionRunner): ExtensionActions {
   const partial: Partial<ExtensionActions> = {
     sendMessage: (message) => {
       sent.push(message);
     },
+    getAllTools: () =>
+      runner().getAllRegisteredTools().map((t) => ({ name: t.definition.name }) as ToolInfo),
+    getCommands: () =>
+      runner().getRegisteredCommands().map((c) => ({ name: c.invocationName }) as SlashCommandInfo),
   };
   return partial as ExtensionActions;
 }
@@ -168,7 +177,7 @@ function buildHarness(extensions: Extension[], runtime: ExtensionRuntime, cwd: s
     new ModelRegistry(undefined as never),
   );
   runner.onError((err) => errors.push(err));
-  runner.bindCore(extensionActions(sent), extensionContextActions());
+  runner.bindCore(extensionActions(sent, () => runner), extensionContextActions());
 
   // Without a UI context the runner reports hasUI false, so the extension's
   // user-facing warnings would be skipped rather than asserted on.
@@ -206,6 +215,9 @@ function buildHarness(extensions: Extension[], runtime: ExtensionRuntime, cwd: s
     },
     extensionPaths() {
       return runner.getExtensionPaths();
+    },
+    mcpServers() {
+      return runtime.mcpServers.list();
     },
   };
 }

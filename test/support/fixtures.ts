@@ -19,7 +19,12 @@ export const CONFIG: GortexConfig = {
   hookArgv: [BIN, "hook", "--agent=pi"],
   enforce: true,
   toolsPreset: "core",
+  // The suites that drive the extension's own client; native.test.ts covers Pi's.
+  nativeMcp: false,
 };
+
+// The native path only registers a binary that resolves; Pi never spawns it here.
+export const NATIVE_CONFIG: GortexConfig = { ...CONFIG, bin: process.execPath, nativeMcp: true };
 
 export function options(overrides: Partial<GortexExtensionOptions> = {}): GortexExtensionOptions {
   return { config: CONFIG, deps: mockDeps, ...overrides };
