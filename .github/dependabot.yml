@@ -22,6 +22,10 @@ updates:
     commit-message:
       prefix: deps
     labels: [dependencies]
+    ignore:
+      # Tracks the engines.node floor.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       # Pi's packages share one version line and must move together.
       pi:
