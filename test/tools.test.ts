@@ -60,7 +60,8 @@ describe("a tool whose name collides with a Pi builtin", () => {
       {},
       undefined,
       undefined,
-      harness.runner.createContext(),
+      // Pi 1.0 widens this to ExtensionToolContext; the bridge reads none of it.
+      harness.runner.createContext() as never,
     )) as { content: { type: string; text: string }[] };
     assert.equal(result.content[0]!.text, "ok");
   });

@@ -20,6 +20,16 @@ import {
   ensureDaemon,
   isBelowVersion,
 } from "./mcp-client.ts";
+import {
+  NATIVE_READY_WAIT_MS,
+  bareToolName,
+  binaryResolves,
+  daemonVersionFromBriefing,
+  isNativeGortexTool,
+  registerNativeServer,
+  supportsNativeMcp,
+  waitForNativeTools,
+} from "./native.ts";
 import { nodeProcessDeps } from "./runtime.ts";
 import type { ProcessDeps } from "./runtime.ts";
 import {
@@ -82,12 +92,18 @@ function reportVersionSkew(
         `run \`gortex upgrade\`.`,
   );
 
-  // A Pi build without a UI (print/JSON mode) or without notify must not take
-  // the session down over an advisory message.
+  notifyUser(ctx, user);
+}
+
+/**
+ * A warning for the user only. A Pi build without a UI (print/JSON mode) or
+ * without notify must not take the session down over an advisory message.
+ */
+function notifyUser(ctx: ExtensionContext | undefined, message: string): void {
   try {
-    if (ctx?.hasUI) ctx.ui.notify(user, "warning");
+    if (ctx?.hasUI) ctx.ui.notify(message, "warning");
   } catch {
-    // the model still gets the orientation line above
+    // advisory only
   }
 }
 
@@ -99,6 +115,8 @@ export interface GortexExtensionOptions {
   deps?: ProcessDeps;
   /** Readiness cap override. */
   readyWaitMs?: number;
+  /** Override for the wait on Pi's built-in MCP connecting the gortex server. */
+  nativeReadyWaitMs?: number;
 }
 
 export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensionOptions = {}): void {
@@ -109,6 +127,18 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
   const piCwd = (): string => (pi as { cwd?: string })?.cwd ?? process.cwd();
   const deps = options.deps ?? nodeProcessDeps;
   const readyWaitMs = options.readyWaitMs ?? READY_WAIT_MS;
+  const nativeReadyWaitMs = options.nativeReadyWaitMs ?? NATIVE_READY_WAIT_MS;
+
+  // On a Pi with built-in MCP, Pi owns the tool channel: it spawns `gortex mcp`
+  // (which starts the daemon itself), registers the tools and renders them.
+  // A binary that does not resolve, or a registration Pi refuses, falls back to
+  // the extension's own client, which reports its failure to the model.
+  let nativeRefusal = "";
+  const native = ((): boolean => {
+    if (!config.nativeMcp || !supportsNativeMcp(pi) || !binaryResolves(config.bin)) return false;
+    nativeRefusal = registerNativeServer(pi, config);
+    return nativeRefusal === "";
+  })();
 
   // Latched for the whole session once the first turn has run the
   // session_start hook, whether or not it produced anything to inject.
@@ -181,6 +211,8 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
   // startSession holds the body of session_start so the readiness promise
   // above settles on every exit path, early returns included.
   async function startSession(ctx?: ExtensionContext): Promise<void> {
+    if (native) return;
+    if (nativeRefusal) notifyUser(ctx, `Pi refused the gortex MCP server (${nativeRefusal}), so the extension runs its own client.`);
     ensureDaemon(config.bin, deps);
     gortexToolNames.clear();
     clearSyncTimer();
@@ -216,16 +248,22 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
 
   // Fires before the agent loop's first LLM call. It can't mutate messages
   // itself, so it just parks the orientation for the `context` hook.
-  pi.on("before_agent_start", async () => {
+  pi.on("before_agent_start", async (_event, ctx) => {
     if (startupHookRan) return;
     startupHookRan = true; // before the first await, so a second turn can't race in
     // Pi awaits each listener, so this holds the turn until the tools are
     // registered and bridgeError reflects the handshake (or the cap expires).
-    const ready = await waitForSession(readyWaitMs);
+    const ready = native
+      ? await waitForNativeTools(pi, nativeReadyWaitMs)
+      : await waitForSession(readyWaitMs);
     const decision = callHook(config.hookArgv, deps, {
       event: "session_start",
-      cwd: piCwd(),
+      cwd: ctx?.cwd ?? piCwd(),
     });
+    // Pi's MCP keeps the handshake to itself, so the version comes from the briefing.
+    if (native && decision.orientation) {
+      reportVersionSkew(ctx, daemonVersionFromBriefing(decision.orientation), "");
+    }
     const parts: string[] = [];
     const bridgeError = getBridgeError();
     if (bridgeError) {
@@ -282,9 +320,12 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
   pi.on("tool_call", async (event: ToolCallEvent, ctx: ExtensionContext): Promise<ToolCallEventResult | void> => {
     const piName: string = (event as { toolName?: string })?.toolName ?? "";
     const piInput: Record<string, unknown> = (event?.input as Record<string, unknown>) ?? {};
-    const isGortexTool = gortexToolNames.has(piName);
+    const isGortexTool = native ? isNativeGortexTool(piName) : gortexToolNames.has(piName);
 
-    const norm = normalizeToolCall(piName, piInput);
+    // A graph tool keeps its own name: Gortex's `read` is no Pi `read`.
+    const norm = isGortexTool
+      ? { tool_name: bareToolName(piName), tool_input: piInput }
+      : normalizeToolCall(piName, piInput);
     const decision = callHook(config.hookArgv, deps, {
       event: "tool_call",
       tool_name: norm.tool_name,

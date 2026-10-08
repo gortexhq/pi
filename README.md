@@ -66,6 +66,7 @@ environment -> `<cwd>/.pi/gortex.json` -> `<agent dir>/extensions/gortex.json`
 | `hook_mode`    | `GORTEX_HOOK_MODE` | `deny`             | Posture: `deny`, `enrich`, `consult-unlock`, `nudge`. |
 | `enforce`      | `GORTEX_ENFORCE`   | `true`             | `false` keeps the graph tools and the briefing, and wires no enforcement. |
 | `tools_preset` | `GORTEX_TOOLS`     | `core`             | Eager MCP surface. `core`/`full` use the daemon's default; `edit`/`nav`/`readonly` narrow it. |
+| `native_mcp`   | `GORTEX_NATIVE_MCP` | `true`            | On Pi 0.99+, register `gortex mcp` with Pi's built-in MCP. `false` keeps the extension's own client. |
 
 ```json
 {
@@ -74,6 +75,17 @@ environment -> `<cwd>/.pi/gortex.json` -> `<agent dir>/extensions/gortex.json`
   "enforce": true
 }
 ```
+
+The extension reads its configuration when Pi loads it, so a change takes
+effect after `/reload`.
+
+**Pi's own `mcp.json` wins.** With `native_mcp` on, the extension registers a
+server named `gortex`. A `gortex` entry in `~/.pi/agent/mcp.json` or
+`.pi/mcp.json` replaces it, including its exposure, and Pi's default exposure
+there is `codemode`, which keeps the tools out of the model's tool list. Leave
+Gortex out of `mcp.json`, or set `"exposure": "direct"` on that entry. A
+Gortex server configured under another name runs as a second connection, and
+read discipline treats its tools as non-graph calls.
 
 **If the graph tools go missing**, the first turn of the session says so and
 names `/reload` as the retry. The bridge fails open, always: an absent binary or

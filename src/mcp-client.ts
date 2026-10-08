@@ -53,6 +53,24 @@ export function isBelowVersion(actual: string, floor: string): boolean {
 // session. Fail open to the daemon's default surface instead.
 const FORWARDED_PRESETS = new Set(["edit", "nav", "readonly"]);
 
+/**
+ * The variables `gortex mcp` needs on top of `env` to serve `toolsPreset`.
+ * The daemon's own default surface already IS core/defer; only a recognised
+ * non-default preset needs the proxy-side narrowing.
+ */
+export function presetEnv(
+  toolsPreset: string,
+  env: Record<string, string | undefined>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  const preset = toolsPreset.trim().toLowerCase();
+  const tools = env.GORTEX_TOOLS || (FORWARDED_PRESETS.has(preset) ? preset : "");
+  if (tools && !env.GORTEX_TOOLS) out.GORTEX_TOOLS = tools;
+  // Never let a preset hide-block tools promoted later by tools_search.
+  if (tools && !env.GORTEX_TOOLS_MODE) out.GORTEX_TOOLS_MODE = "defer";
+  return out;
+}
+
 export interface MCPStdioClientOptions {
   bin: string;
   toolsPreset: string;
@@ -137,16 +155,7 @@ export class MCPStdioClient {
   }
 
   private childEnv(): Record<string, string | undefined> {
-    const env: Record<string, string | undefined> = { ...this.env };
-    const preset = this.toolsPreset.trim().toLowerCase();
-    // The daemon's own default surface already IS core/defer; only a
-    // recognised non-default preset needs the proxy-side narrowing.
-    if (!env.GORTEX_TOOLS && FORWARDED_PRESETS.has(preset)) {
-      env.GORTEX_TOOLS = preset;
-    }
-    // Never let a preset hide-block tools promoted later by tools_search.
-    if (env.GORTEX_TOOLS && !env.GORTEX_TOOLS_MODE) env.GORTEX_TOOLS_MODE = "defer";
-    return env;
+    return { ...this.env, ...presetEnv(this.toolsPreset, this.env) };
   }
 
   private spawnChild(): void {
