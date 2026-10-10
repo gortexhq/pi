@@ -88,6 +88,17 @@ built-ins Pi may grow later as well as today's collisions. Each aliased tool
 front-loads the rename into its own description, because Gortex's guidance and
 denial messages name the bare tool and the model has to map it.
 
+### Edit diffs
+
+The daemon reports an applied edit without its content, so the bridge reads the
+files a write names before and after the call and stores their diffs in the
+result's `details`, shaped like Pi's own edit details (see `src/diff.ts`). The
+model still reads only Gortex's reply.
+
+On Pi's built-in MCP the reads ride the `tool_call` and `tool_result` events.
+Pi prepares a whole parallel batch before running it, so no lock can span a
+call; a file two calls in flight write gets no diff instead.
+
 ## Channel 2: read discipline over the hook bridge
 
 Every tool call Pi is about to run is forwarded to Gortex's hook with a

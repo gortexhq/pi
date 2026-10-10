@@ -12,6 +12,7 @@ import type {
 
 import { resolveConfig } from "./config.ts";
 import type { GortexConfig } from "./config.ts";
+import { watchNativeEdits } from "./diff.ts";
 import { callHook, normalizeToolCall } from "./hook.ts";
 import {
   MCPStdioClient,
@@ -32,6 +33,7 @@ import {
   supportsNativeMcp,
   waitForNativeTools,
 } from "./native.ts";
+import { nativeRenderers } from "./render.ts";
 import { nodeProcessDeps } from "./runtime.ts";
 import type { ProcessDeps } from "./runtime.ts";
 import {
@@ -331,10 +333,8 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
     stopBridge();
   });
 
-  if (!config.enforce) return;
-
   // Enforcement: every non-Gortex tool call is checked against the Go hook.
-  pi.on("tool_call", async (event: ToolCallEvent, ctx: ExtensionContext): Promise<ToolCallEventResult | void> => {
+  const enforceReadDiscipline = async (event: ToolCallEvent, ctx: ExtensionContext): Promise<ToolCallEventResult | void> => {
     const piName: string = (event as { toolName?: string })?.toolName ?? "";
     const piInput: Record<string, unknown> = (event?.input as Record<string, unknown>) ?? {};
     const isGortexTool = native ? isNativeGortexTool(piName) : gortexToolNames.has(piName);
@@ -367,5 +367,17 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
       }
     }
     return;
-  });
+  };
+  if (config.enforce) pi.on("tool_call", enforceReadDiscipline);
+
+  // Edit diffs on Pi's built-in MCP, after enforcement so a blocked call is never snapshotted.
+  if (native) {
+    watchNativeEdits(pi, () => native);
+    // Pi < 1.0.1 has no tool renderers; the diffs are still stored.
+    try {
+      (pi as Partial<Pick<ExtensionAPI, "registerToolRenderer">>).registerToolRenderer?.(nativeRenderers);
+    } catch {
+      // drawing diffs is optional
+    }
+  }
 }

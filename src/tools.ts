@@ -1,7 +1,10 @@
 // Tool registration: each tool the bridge lists becomes a native Pi tool whose
 // execute() forwards to tools/call.
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+
+import { candidatePaths, editDetails, isFileEdit, withFileDiffs } from "./diff.ts";
+import type { FileDiff } from "./diff.ts";
 
 import type { ToolDescriptor } from "./mcp-client.ts";
 import { callRenderer, readCallRenderer, renderResult, resultText } from "./render.ts";
@@ -44,7 +47,13 @@ interface BridgeToolDefinition {
   label: string;
   description: string;
   parameters: unknown;
-  execute(toolCallId: string, params: Record<string, unknown>): Promise<unknown>;
+  execute(
+    toolCallId: string,
+    params: Record<string, unknown>,
+    signal: AbortSignal | undefined,
+    onUpdate: unknown,
+    ctx: ExtensionContext | undefined,
+  ): Promise<unknown>;
   renderCall: RenderCall;
   renderResult: RenderResult;
 }
@@ -86,12 +95,20 @@ export function registerOneTool(pi: ExtensionAPI, desc: ToolDescriptor): void {
     label: name,
     description: piAliasedDescription(name, piAliasName(name), (desc.description || name).trim()),
     parameters,
-    async execute(_id: string, params: Record<string, unknown>) {
+    async execute(_id, params, _signal, _onUpdate, ctx) {
       const client = getClient();
       if (!client) throw new Error(`gortex ${name}: MCP bridge is not connected`);
+      const args = params ?? {};
+      const callTool = () => client.callTool(name, args);
       let result: unknown;
+      let diffs: FileDiff[] = [];
       try {
-        result = await client.callTool(name, params ?? {});
+        if (ctx && isFileEdit(name, args)) {
+          const paths = candidatePaths(args, ctx.cwd);
+          ({ result, diffs } = await withFileDiffs(paths, ctx.cwd, callTool, (r) => !(r as { isError?: boolean })?.isError));
+        } else {
+          result = await callTool();
+        }
       } catch (err) {
         throw new Error(`gortex ${name} failed: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -103,7 +120,7 @@ export function registerOneTool(pi: ExtensionAPI, desc: ToolDescriptor): void {
       }
       const text = resultText(result);
       if ((result as { isError?: boolean })?.isError) throw new Error(text || `gortex ${name} failed`);
-      return { content: [{ type: "text", text }], details: {} };
+      return { content: [{ type: "text", text }], details: editDetails(diffs) };
     },
     renderCall: (name === "read" ? readCallRenderer : callRenderer)(piAliasName(name)),
     renderResult,

@@ -23,6 +23,7 @@ runs the suites under type stripping.
 | `src/mcp-client.ts` | JSON-RPC client over the `gortex mcp` child |
 | `src/tools.ts` | MCP tools to Pi tool registration and promotion |
 | `src/render.ts` | How a bridged tool's call and result render in Pi's TUI |
+| `src/diff.ts` | Diffs of the files a Gortex edit writes, on both tool channels |
 | `src/hook.ts` | Bridge to `gortex hook --agent=pi` |
 | `src/config.ts` | Environment and sidecar resolution |
 | `src/runtime.ts` | Injectable process seam (`spawn`, `execFileSync`) |
