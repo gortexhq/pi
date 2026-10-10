@@ -26,10 +26,10 @@ updates:
       # Tracks the engines.node floor.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+      # Pinned to the Pi the suites run against; bumped by hand when the
+      # extension needs a newer Pi.
+      - dependency-name: "@earendil-works/*"
     groups:
-      # Pi's packages share one version line and must move together.
-      pi:
-        patterns: ["@earendil-works/*"]
       dev-minor-patch:
         patterns: ["*"]
         exclude-patterns: ["@earendil-works/*"]
