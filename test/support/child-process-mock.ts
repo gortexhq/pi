@@ -26,6 +26,7 @@ export interface Control {
   hookDecision: Record<string, unknown>;
   failFirstInitialize: boolean;
   holdNextChild: boolean;
+  onToolCall: ((name: string, args: Record<string, unknown>) => unknown) | undefined;
   serverVersion: string | null;
   protocolVersion: string;
   spawns: SpawnRecord[];
@@ -54,6 +55,9 @@ export const control: Control = {
   // lets a suite hold registration open for as long as it needs without
   // asserting on wall-clock latency.
   holdNextChild: false,
+  // Answers tools/call in place of the plain "ok" reply, and may act on disk
+  // the way the daemon would.
+  onToolCall: undefined,
 
   // Observations.
   spawns: [] as SpawnRecord[],
@@ -67,6 +71,7 @@ export const control: Control = {
     this.hookDecision = {};
     this.failFirstInitialize = false;
     this.holdNextChild = false;
+    this.onToolCall = undefined;
     this.serverVersion = "0.64.4";
     this.protocolVersion = "2025-06-18";
     this.spawns = [];
@@ -159,7 +164,11 @@ export class FakeChild extends EventEmitter {
     }
 
     if (msg.method === "tools/call") {
-      this.reply({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: "ok" }] } }, 0);
+      const params = (msg as { params?: { name?: string; arguments?: Record<string, unknown> } }).params ?? {};
+      const result = control.onToolCall?.(params.name ?? "", params.arguments ?? {}) ?? {
+        content: [{ type: "text", text: "ok" }],
+      };
+      this.reply({ jsonrpc: "2.0", id: msg.id, result }, 0);
       return true;
     }
 

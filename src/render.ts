@@ -1,18 +1,25 @@
 // TUI rendering for bridged tools: a call line read off Gortex's argument
 // shape (operation, target, options), Pi's own read renderer for a file read,
-// and a result collapsed until the user expands it.
+// an edit's diff, and a result collapsed until the user expands it.
 
-import { createReadToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { createReadToolDefinition, renderDiff } from "@earendil-works/pi-coding-agent";
+import type { Theme, ToolDefinition, ToolRenderers } from "@earendil-works/pi-coding-agent";
+import { Container, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import type { Component } from "@earendil-works/pi-tui";
 
+import type { EditDetails } from "./diff.ts";
 import { textFromResult } from "./mcp-client.ts";
+import { isNativeGortexTool } from "./native.ts";
 
 type ToolRenderContext = Parameters<NonNullable<ToolDefinition["renderCall"]>>[2];
 
 export type RenderCall = (args: Record<string, unknown>, theme: Theme, context: ToolRenderContext) => Component;
-export type RenderResult = (result: unknown, options: { expanded?: boolean }) => Component;
+export type RenderResult = (
+  result: unknown,
+  options: { expanded?: boolean },
+  theme?: Theme,
+  context?: ToolRenderContext,
+) => Component;
 
 const OPERATION_ARGS = ["operation", "kind"];
 const SUBJECT_ARGS = ["target", "query", "question", "task", "path"];
@@ -144,6 +151,51 @@ export function resultText(result: unknown): string {
   return textFromResult(result) || JSON.stringify(structured ?? result ?? {});
 }
 
-/** renderResult collapses the result to nothing until the user expands it with ctrl+o. */
-export const renderResult: RenderResult = (result, options) =>
-  new Text(options?.expanded ? resultText(result) : "", 0, 0);
+/** diffView draws each file an edit changed with Pi's diff renderer, or nothing when the result has none. */
+function diffView(result: unknown, theme: Theme | undefined, context: ToolRenderContext | undefined): Container | undefined {
+  const diffs = (result as { details?: EditDetails })?.details?.diffs;
+  if (!diffs?.length || !theme || context?.isError) return undefined;
+  const view = new Container();
+  for (const { path, diff } of diffs) {
+    view.addChild(new Spacer(1));
+    if (diffs.length > 1) view.addChild(new Text(theme.fg("accent", path), 1, 0));
+    view.addChild(new Text(renderDiff(diff, { filePath: path }), 1, 0));
+  }
+  return view;
+}
+
+/**
+ * renderResult shows the diff of every file an edit changed, the way Pi's own
+ * edit does. Gortex's text reply stays collapsed until the user expands it
+ * with ctrl+o.
+ */
+export const renderResult: RenderResult = (result, options, theme, context) => {
+  const text = new Text(options?.expanded ? resultText(result) : "", 0, 0);
+  const view = diffView(result, theme, context);
+  if (!view) return text;
+  if (options?.expanded) view.addChild(text);
+  return view;
+};
+
+/**
+ * nativeRenderers draws the diffs watchNativeEdits stores above Pi's own MCP
+ * result, which shows once expanded. Every other tool keeps its renderers.
+ */
+export function nativeRenderers(toolName: string, next: () => ToolRenderers | undefined): ToolRenderers | undefined {
+  const base = next();
+  // Without a base, Pi's MCP extension fills in its own renderers.
+  if (!base || !isNativeGortexTool(toolName)) return base;
+  const baseResult = base.renderResult;
+  return {
+    ...base,
+    renderResult(result, options, theme, context) {
+      // Pi's renderer reuses lastComponent as its own and clears it.
+      const own = () => baseResult?.(result, options, theme, { ...context, lastComponent: undefined });
+      const view = diffView(result, theme, context);
+      if (!view) return own() ?? new Text("", 0, 0);
+      const rest = options.expanded ? own() : undefined;
+      if (rest) view.addChild(rest);
+      return view;
+    },
+  };
+}
