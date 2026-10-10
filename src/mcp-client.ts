@@ -174,6 +174,11 @@ export class MCPStdioClient {
     child.stdin?.on("error", () => {}); // EPIPE race: child may exit before stdin.write() finishes
     child.on("error", () => this.markExited(new Error("gortex mcp spawn failed")));
     child.on("exit", () => this.markExited(new Error("gortex mcp exited")));
+    // The child and its pipes must never keep the event loop alive.
+    child.unref?.();
+    child.stdin?.unref?.();
+    child.stdout?.unref?.();
+    child.stderr?.unref?.();
   }
 
   private markExited(err: Error): void {

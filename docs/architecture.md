@@ -154,6 +154,12 @@ invocation that overlaps it stops that bridge instead of leaving the child
 behind. State held per instance would leak a Gortex child on every new
 session.
 
+Process exit has no next invocation, so the extension also stops the bridge
+from Pi's `session_shutdown` event, which fires on quit and on every
+replacement path. The child is spawned unref'd, pipes included: they must
+never be what holds the host's event loop open, or a print or JSON run that
+finished its work hangs at exit instead of draining.
+
 ## Failure posture
 
 Fail open, everywhere. A missing binary, a daemon that is down, a handshake that
