@@ -303,4 +303,21 @@ describe("a Gortex call that writes files on Pi's built-in MCP", () => {
     assert.equal(harness.runner.resolveToolRenderers("bash", () => base as never), base);
     assert.equal(harness.runner.resolveToolRenderers(EDIT, () => undefined), undefined, "Pi's MCP fallback must stay reachable");
   });
+
+  it("hides Pi's result preview until expanded, except for an error", () => {
+    const base = {
+      renderResult: () => new Text("PI-MCP-OUTPUT", 0, 0),
+    };
+    const renderers = harness.runner.resolveToolRenderers(`${MCP_TOOL_PREFIX}search`, () => base as never)!;
+    const result = { content: [{ type: "text", text: "rows" }] };
+    const view = (expanded: boolean, isError = false) =>
+      stripTerminalSequences(
+        renderers.renderResult!(result as never, { expanded, isPartial: false }, plainTheme as never, { cwd: harness.cwd, isError } as never)
+          .render(80)
+          .join("\n"),
+      );
+    assert.equal(view(false).trim(), "");
+    assert.match(view(true), /PI-MCP-OUTPUT/);
+    assert.match(view(false, true), /PI-MCP-OUTPUT/);
+  });
 });

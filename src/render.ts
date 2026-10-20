@@ -179,7 +179,8 @@ export const renderResult: RenderResult = (result, options, theme, context) => {
 
 /**
  * nativeRenderers draws the diffs watchNativeEdits stores above Pi's own MCP
- * result, which shows once expanded. Every other tool keeps its renderers.
+ * result, which shows once expanded or on an error. Every other tool keeps its
+ * renderers.
  */
 export function nativeRenderers(toolName: string, next: () => ToolRenderers | undefined): ToolRenderers | undefined {
   const base = next();
@@ -191,9 +192,9 @@ export function nativeRenderers(toolName: string, next: () => ToolRenderers | un
     renderResult(result, options, theme, context) {
       // Pi's renderer reuses lastComponent as its own and clears it.
       const own = () => baseResult?.(result, options, theme, { ...context, lastComponent: undefined });
+      const rest = options.expanded || context.isError ? own() : undefined;
       const view = diffView(result, theme, context);
-      if (!view) return own() ?? new Text("", 0, 0);
-      const rest = options.expanded ? own() : undefined;
+      if (!view) return rest ?? new Text("", 0, 0);
       if (rest) view.addChild(rest);
       return view;
     },
