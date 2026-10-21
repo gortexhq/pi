@@ -62,7 +62,7 @@ environment -> `<cwd>/.pi/gortex.json` -> `<agent dir>/extensions/gortex.json`
 
 | Sidecar key    | Environment        | Default            | Meaning |
 |----------------|--------------------|--------------------|---------|
-| `bin`          | `GORTEX_BIN`       | `gortex` on `PATH` | Binary used for `daemon start`, `mcp` and `hook`. |
+| `bin`          | `GORTEX_BIN`       | `gortex` on `PATH` | Binary used for `daemon start`, `mcp` and `hook`. Read from the global sidecar only; a project file cannot set it. |
 | `hook_mode`    | `GORTEX_HOOK_MODE` | `deny`             | Posture: `deny`, `enrich`, `consult-unlock`, `nudge`. |
 | `enforce`      | `GORTEX_ENFORCE`   | `true`             | `false` keeps the graph tools and the briefing, and wires no enforcement. |
 | `tools_preset` | `GORTEX_TOOLS`     | `core`             | Eager MCP surface. `core`/`full` use the daemon's default; `edit`/`nav`/`readonly` narrow it. |

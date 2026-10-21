@@ -185,3 +185,7 @@ Every value resolves at runtime, layered from the environment down through a
 project file and a global one to defaults. See the table in the
 [README](../README.md#configure). Runtime resolution is what lets one artifact
 serve both the npm package and a directory install.
+
+The project file sits in whatever repository Pi was opened in, so it cannot
+set `bin`. Otherwise a cloned repository could choose the executable the
+extension spawns. The binary comes from `GORTEX_BIN`, the global file or `PATH`.
