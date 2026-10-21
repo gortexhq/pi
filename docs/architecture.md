@@ -95,20 +95,13 @@ files a write names before and after the call and stores their diffs in the
 result's `details`, shaped like Pi's own edit details (see `src/diff.ts`). The
 model still reads only Gortex's reply.
 
-Gortex names files relative to the repo root, sometimes with the repo name in
-front, so each path is tried against both Pi's cwd and the nearest directory
-holding `.git`. Both `/` and `\` separate segments.
-
 On Pi's built-in MCP the reads ride the `tool_call` and `tool_result` events.
 Pi prepares a whole parallel batch before running it, so no lock can span a
-call; a file two calls in flight write gets no diff instead. A call that ends
-without a result (blocked by another handler) never ran, so it contests nothing.
+call; a file two calls in flight write gets no diff instead.
 
-A shell command can write any file, so on either channel an edit that overlaps
-a `bash` or `powershell` call gets a note in place of its diff. Notes also stand
-in for a change a diff would not show or could not draw cheaply: line endings or
-a byte order mark alone, a file over 1 MiB, binary or non-UTF-8 content, and a
-change large enough that Pi's line diff would stall the event loop.
+A wrong diff is worse than none, so where one could mislead or stall Pi (a
+shell command running alongside, or a change a line diff cannot show cheaply) a
+one-line note stands in for it.
 
 ## Channel 2: read discipline over the hook bridge
 
@@ -131,21 +124,14 @@ behaviour identical across hosts.
 
 ## Orientation injection
 
-The session briefing is returned from the first turn's `before_agent_start` as a
-hidden custom message (`customType: "gortex"`). Pi stores it in the session
-right after the prompt, so every later LLM call carries it. Carrying it in the
-system prompt would place it at the head of the conversation, where a change
-invalidates prefix prompt caching.
-
-The hook is shelled once per session. A resumed or reloaded session already
-holds a briefing, so it is not stored twice. After a compaction summarises it
-away, the next turn stores the same text again.
+The session briefing is stored once in the session history as a hidden message,
+so every LLM call carries it. It stays out of the system prompt, because a
+change there invalidates prefix prompt caching.
 
 ## Withdrawn tools
 
-Pi has no way to unregister a tool. When a `tools/list_changed` re-fetch no
-longer lists a registered Gortex tool, the bridge drops it from Pi's active
-tool set, and adds it back if the daemon lists it again.
+Pi cannot unregister a tool, so one the daemon withdraws leaves Pi's active tool
+set instead.
 
 ## The readiness barrier
 

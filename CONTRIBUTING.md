@@ -110,8 +110,8 @@ each suite states in its header what it covers and why.
 1. Fork the repository and create a branch (`feat/...`, `fix/...`).
 2. Make the change, with tests.
 3. Run `npm run check`.
-4. Update the README configuration table and
-   [docs/architecture.md](docs/architecture.md) if behaviour or config changed.
+4. Update the README configuration table if config changed, and
+   [docs/architecture.md](docs/architecture.md) briefly if a design decision changed.
 5. Open a pull request and fill in the template.
 
 Small, focused PRs get reviewed fastest. For larger changes, open an issue or

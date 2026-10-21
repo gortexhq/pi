@@ -43,6 +43,7 @@ runs the suites under type stripping.
   the process seam. Read `docs/tests.md` before adding a suite.
 - CI runs on Linux, macOS and Windows. Use `node:path` for paths and keep
   process spawning behind `src/runtime.ts`.
-- Update the README configuration table and `docs/architecture.md` when
-  behaviour or config changes.
+- Update the README configuration table when config changes.
+- `docs/architecture.md` holds the important design decisions, briefly. Touch
+  it only when a decision changes, and leave the details to the code.
 - Commit subjects use Conventional Commits (`feat:`, `fix:`, `docs:`, ...).
