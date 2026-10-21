@@ -36,6 +36,12 @@ const TOOLS = [
 
 const plainTheme = { fg: (_c: string, t: string) => t, bold: (t: string) => t };
 
+/** The note of a result's only file. */
+function noteOf(details: EditDetails | undefined): string | undefined {
+  assert.equal(details?.diffs?.length, 1, JSON.stringify(details));
+  return details!.diffs![0]!.note;
+}
+
 interface Result {
   content: { type: string; text: string }[];
   details: EditDetails;
@@ -43,7 +49,7 @@ interface Result {
 
 describe("a Gortex call that writes files", () => {
   let harness: Harness;
-  let writes: Record<string, string>;
+  let writes: Record<string, string | Buffer>;
 
   before(async () => {
     initTheme("dark");
@@ -64,7 +70,7 @@ describe("a Gortex call that writes files", () => {
 
   after(() => assert.deepEqual(harness.errors, []));
 
-  async function run(tool: string, args: Record<string, unknown>, changes: Record<string, string>) {
+  async function run(tool: string, args: Record<string, unknown>, changes: Record<string, string | Buffer>) {
     writes = changes;
     return (await harness.tool(tool)!.execute(
       "call",
@@ -154,6 +160,58 @@ describe("a Gortex call that writes files", () => {
       { "src/d.ts": "a\nB\n" },
     );
     assert.doesNotMatch(result.details.diffs![0]!.diff, /^-1 a$/m);
+  });
+
+  it("notes a change of line endings alone", async () => {
+    file("src/eol.ts", "a\nb\n");
+    const result = await run("gortex_edit", { operation: "file", target: { file: "src/eol.ts" } }, { "src/eol.ts": "a\r\nb\r\n" });
+    assert.deepEqual(noteOf(result.details), "line endings LF -> CRLF");
+    assert.equal(result.details.diff, undefined);
+  });
+
+  it("notes a byte order mark added", async () => {
+    file("src/bom.ts", "a\n");
+    const result = await run("gortex_edit", { operation: "file", target: { file: "src/bom.ts" } }, { "src/bom.ts": "﻿a\n" });
+    assert.equal(noteOf(result.details), "byte order mark added");
+  });
+
+  it("notes a file it will not diff, instead of dropping it", async () => {
+    file("src/big.txt", "x\n");
+    file("src/bin.dat", "a\0b");
+    writeFileSync(join(harness.cwd, "src/latin1.txt"), Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]));
+    const big = await run("gortex_edit", { operation: "file", target: { file: "src/big.txt" } }, { "src/big.txt": "y\n".repeat(600_000) });
+    assert.equal(noteOf(big.details), "not diffed: over 1 MiB");
+    const bin = await run("gortex_edit", { operation: "file", target: { file: "src/bin.dat" } }, { "src/bin.dat": "a\0c" });
+    assert.equal(noteOf(bin.details), "not diffed: binary file");
+    const latin = await run(
+      "gortex_edit",
+      { operation: "file", target: { file: "src/latin1.txt" } },
+      { "src/latin1.txt": Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x21, 0x0a]) },
+    );
+    assert.equal(noteOf(latin.details), "not diffed: not UTF-8 text");
+  });
+
+  it("notes a change too large to diff without stalling Pi", async () => {
+    const lines = (tag: string) => Array.from({ length: 4000 }, (_, i) => `${tag} ${i}`).join("\n");
+    file("src/gen.ts", lines("old"));
+    const result = await run("gortex_edit", { operation: "file", target: { file: "src/gen.ts" } }, { "src/gen.ts": lines("new") });
+    assert.equal(noteOf(result.details), "not diffed: change too large to diff quickly");
+  });
+
+  it("reads a path written with Windows separators", async () => {
+    file("src/win.ts", "w\n");
+    const result = await run("gortex_edit", { operation: "file", target: { file: "src\\win.ts" } }, { "src/win.ts": "W\n" });
+    assert.equal(result.details.diffs![0]!.path, join("src", "win.ts"));
+  });
+
+  it("notes a diff a concurrent shell command could have touched", async () => {
+    file("src/sh.ts", "s\n");
+    await harness.runner.emitToolCall({ type: "tool_call", toolCallId: "bash-1", toolName: "bash", input: { command: "echo" } });
+    const during = await run("gortex_edit", { operation: "file", target: { file: "src/sh.ts" } }, { "src/sh.ts": "S\n" });
+    assert.equal(noteOf(during.details), "not diffed: a shell command ran at the same time");
+    await harness.runner.emit({ type: "tool_execution_end", toolCallId: "bash-1", toolName: "bash", result: {}, isError: false } as never);
+    const after = await run("gortex_edit", { operation: "file", target: { file: "src/sh.ts" } }, { "src/sh.ts": "s2\n" });
+    assert.match(after.details.diff!, /^\+1 s2$/m);
   });
 
   it("does not diff a dry run", async () => {
@@ -282,6 +340,42 @@ describe("a Gortex call that writes files on Pi's built-in MCP", () => {
     assert.equal(await finish(gortexId, EDIT, gortexInput), undefined);
   });
 
+  it("still diffs a file whose other writer was blocked before it ran", async () => {
+    file("src/d.ts", "d\n");
+    const input = { operation: "file", target: { file: "src/d.ts" } };
+    const blocked = await start(EDIT, input);
+    const id = await start(EDIT, input);
+    // Pi ends a blocked call without a tool_result.
+    await harness.runner.emit({ type: "tool_execution_end", toolCallId: blocked, toolName: EDIT, result: {}, isError: true } as never);
+    file("src/d.ts", "D\n");
+    const details = await finish(id, EDIT, input);
+    assert.match(details!.diff!, /^\+1 D$/m);
+  });
+
+  it("notes a diff a concurrent shell command could have touched", async () => {
+    file("src/e.ts", "e\n");
+    const input = { operation: "file", target: { file: "src/e.ts" } };
+    const id = await start(EDIT, input);
+    const shell = await start("bash", { command: "echo" });
+    file("src/e.ts", "E\n");
+    assert.equal(noteOf(await finish(id, EDIT, input)), "not diffed: a shell command ran at the same time");
+    await harness.runner.emit({ type: "tool_execution_end", toolCallId: shell, toolName: "bash", result: {}, isError: false } as never);
+  });
+
+  it("draws a note in place of a diff", () => {
+    const renderers = harness.runner.resolveToolRenderers(EDIT, () => ({ renderResult: () => new Text("", 0, 0) }) as never)!;
+    const result = {
+      content: [{ type: "text", text: "status: applied" }],
+      details: { diffs: [{ path: "src/a.ts", diff: "", patch: "", note: "line endings LF -> CRLF" }] },
+    };
+    const view = stripTerminalSequences(
+      renderers.renderResult!(result as never, { expanded: false, isPartial: false }, plainTheme as never, { cwd: harness.cwd, isError: false } as never)
+        .render(80)
+        .join("\n"),
+    );
+    assert.match(view, /src\/a\.ts line endings LF -> CRLF/);
+  });
+
   it("draws the diff above Pi's result, which shows once expanded", () => {
     const base = {
       renderResult: () => new Text("PI-MCP-OUTPUT", 0, 0),
@@ -319,5 +413,64 @@ describe("a Gortex call that writes files on Pi's built-in MCP", () => {
     assert.equal(view(false).trim(), "");
     assert.match(view(true), /PI-MCP-OUTPUT/);
     assert.match(view(false, true), /PI-MCP-OUTPUT/);
+  });
+});
+
+// Gortex names files from the repo root, and Pi may run from anywhere under it.
+describe("a Gortex edit while Pi runs in a subdirectory of the repo", () => {
+  const input = { operation: "file", target: { file: "repo/app/src/a.ts" } };
+  let bridged: Harness;
+  let native: Harness;
+
+  before(async () => {
+    initTheme("dark");
+    resetInitializeAttempts();
+    control.reset({
+      tools: TOOLS,
+      hookDecision: { orientation: ORIENTATION },
+      onToolCall: () => {
+        writeFileSync(join(bridged.cwd, "src", "a.ts"), "one\nTWO\n");
+        return undefined;
+      },
+    });
+    bridged = await createHarness(await loadFactory(0), options(), { repoSubdir: "app" });
+    await bridged.sessionStart();
+    native = await createHarness(withMcpConnector(await loadFactory(1)), options({ config: NATIVE_CONFIG }), {
+      repoSubdir: "app",
+    });
+    await native.sessionStart();
+    for (const h of [bridged, native]) {
+      mkdirSync(join(h.cwd, "src"), { recursive: true });
+      writeFileSync(join(h.cwd, "src", "a.ts"), "one\ntwo\n");
+    }
+  });
+
+  it("diffs the file on the extension's own client", async () => {
+    const result = (await bridged.tool("gortex_edit")!.execute(
+      "call",
+      input as never,
+      undefined,
+      undefined,
+      bridged.runner.createContext() as never,
+    )) as Result;
+    assert.equal(result.details.diffs![0]!.path, join("src", "a.ts"));
+    assert.match(result.details.diff!, /^\+2 TWO$/m);
+  });
+
+  it("diffs the file on Pi's built-in MCP", async () => {
+    const EDIT = `${MCP_TOOL_PREFIX}edit`;
+    await native.runner.emitToolCall({ type: "tool_call", toolCallId: "sub-1", toolName: EDIT, input });
+    writeFileSync(join(native.cwd, "src", "a.ts"), "one\nTWO\n");
+    const result = await native.runner.emitToolResult({
+      type: "tool_result",
+      toolCallId: "sub-1",
+      toolName: EDIT,
+      input,
+      content: [{ type: "text", text: "status: applied" }],
+      details: {},
+      isError: false,
+    });
+    const details = result?.details as EditDetails | undefined;
+    assert.equal(details?.diffs![0]!.path, join("src", "a.ts"));
   });
 });

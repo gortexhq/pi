@@ -156,8 +156,12 @@ function diffView(result: unknown, theme: Theme | undefined, context: ToolRender
   const diffs = (result as { details?: EditDetails })?.details?.diffs;
   if (!diffs?.length || !theme || context?.isError) return undefined;
   const view = new Container();
-  for (const { path, diff } of diffs) {
+  for (const { path, diff, note } of diffs) {
     view.addChild(new Spacer(1));
+    if (note) {
+      view.addChild(new Text(`${theme.fg("accent", path)} ${theme.fg("muted", note)}`, 1, 0));
+      continue;
+    }
     if (diffs.length > 1) view.addChild(new Text(theme.fg("accent", path), 1, 0));
     view.addChild(new Text(renderDiff(diff, { filePath: path }), 1, 0));
   }

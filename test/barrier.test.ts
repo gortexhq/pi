@@ -256,7 +256,7 @@ describe("a reloaded session that already holds the briefing", () => {
     await first.turn();
     await first.sessionShutdown("reload");
 
-    reloaded = await createHarness(await loadFactory(7), options(), first.session);
+    reloaded = await createHarness(await loadFactory(7), options(), { session: first.session });
     await reloaded.sessionStart("reload");
     await reloaded.turn();
     injected = await reloaded.context();

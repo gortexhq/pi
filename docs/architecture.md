@@ -95,9 +95,20 @@ files a write names before and after the call and stores their diffs in the
 result's `details`, shaped like Pi's own edit details (see `src/diff.ts`). The
 model still reads only Gortex's reply.
 
+Gortex names files relative to the repo root, sometimes with the repo name in
+front, so each path is tried against both Pi's cwd and the nearest directory
+holding `.git`. Both `/` and `\` separate segments.
+
 On Pi's built-in MCP the reads ride the `tool_call` and `tool_result` events.
 Pi prepares a whole parallel batch before running it, so no lock can span a
-call; a file two calls in flight write gets no diff instead.
+call; a file two calls in flight write gets no diff instead. A call that ends
+without a result (blocked by another handler) never ran, so it contests nothing.
+
+A shell command can write any file, so on either channel an edit that overlaps
+a `bash` or `powershell` call gets a note in place of its diff. Notes also stand
+in for a change a diff would not show or could not draw cheaply: line endings or
+a byte order mark alone, a file over 1 MiB, binary or non-UTF-8 content, and a
+change large enough that Pi's line diff would stall the event loop.
 
 ## Channel 2: read discipline over the hook bridge
 
