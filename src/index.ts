@@ -3,7 +3,7 @@
 // hook bridge. See docs/architecture.md for the design.
 
 import type {
-  ContextEvent,
+  BeforeAgentStartEventResult,
   ExtensionAPI,
   ExtensionContext,
   ToolCallEvent,
@@ -49,6 +49,7 @@ import {
   setBridgeError,
   setClient,
   setVersionWarning,
+  withdrawnToolNames,
 } from "./state.ts";
 
 export type { GortexConfig, SidecarConfig } from "./config.ts";
@@ -111,6 +112,37 @@ function notifyUser(ctx: ExtensionContext | undefined, message: string): void {
   }
 }
 
+/** Marks the messages this extension stores in the session. */
+const GORTEX_MESSAGE_TYPE = "gortex";
+
+interface GortexMessageDetails {
+  /** Whether the content includes the session briefing, not only warnings. */
+  briefing: boolean;
+}
+
+/** Kept out of the transcript; Pi still sends it to the model. */
+function gortexMessage(content: string, briefing: boolean): BeforeAgentStartEventResult {
+  const details: GortexMessageDetails = { briefing };
+  return { message: { customType: GORTEX_MESSAGE_TYPE, content, display: false, details } };
+}
+
+/**
+ * Whether a briefing already sits in what the model sees: after a resume or
+ * /reload, or when compaction kept it. Answers false when Pi can't tell.
+ */
+function briefingInContext(ctx: ExtensionContext | undefined): boolean {
+  try {
+    return (ctx?.sessionManager.buildContextEntries() ?? []).some(
+      (entry) =>
+        entry.type === "custom_message" &&
+        entry.customType === GORTEX_MESSAGE_TYPE &&
+        (entry.details as GortexMessageDetails | undefined)?.briefing === true,
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** Test seams. Pi itself calls the factory with the `pi` object alone. */
 export interface GortexExtensionOptions {
   /** Pre-resolved configuration; resolveConfig() runs when this is absent. */
@@ -147,10 +179,10 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
   // Latched for the whole session once the first turn has run the
   // session_start hook, whether or not it produced anything to inject.
   let startupHookRan = false;
-  // Orientation awaiting injection into the next LLM call, computed once per
-  // session. The `context` hook appends it as a tail user message, because a
-  // systemPrompt change sits at messages[0] and invalidates prefix caching.
-  let pendingOrientation = "";
+  // This session's briefing, kept so a compaction that summarises it away can
+  // send it again on the next turn.
+  let briefing = "";
+  let briefingCompacted = false;
 
   // Settles when the current session_start handler is done: bridge up and
   // tools registered, or the handshake failed. Never rejects.
@@ -200,7 +232,8 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
   // session's bridge child (if any) is stopped before a fresh handshake.
   pi.on("session_start", async (_event, ctx) => {
     startupHookRan = false;
-    pendingOrientation = "";
+    briefing = "";
+    briefingCompacted = false;
     setBridgeError("");
     setVersionWarning("");
     armSessionReady(); // no-op when a turn is already parked on this session
@@ -234,6 +267,7 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
     if (nativeRefusal) notifyUser(ctx, `Pi refused the gortex MCP server (${nativeRefusal}), so the extension runs its own client.`);
     ensureDaemon(config.bin, deps);
     gortexToolNames.clear();
+    withdrawnToolNames.clear();
     stopBridge();
     const c = new MCPStdioClient({ bin: config.bin, toolsPreset: config.toolsPreset, deps });
     // Claim the slot before the first await: an overlapping
@@ -260,10 +294,20 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
     }
   }
 
-  // Fires before the agent loop's first LLM call. It can't mutate messages
-  // itself, so it just parks the orientation for the `context` hook.
-  pi.on("before_agent_start", async (_event, ctx) => {
-    if (startupHookRan) return;
+  pi.on("session_compact", () => {
+    briefingCompacted = true;
+  });
+
+  // Fires before the agent loop's first LLM call. The returned message is
+  // stored in the session after the prompt, so every later LLM call carries it
+  // and the system prompt, which prefix caching keys on, stays untouched.
+  pi.on("before_agent_start", async (_event, ctx): Promise<BeforeAgentStartEventResult | void> => {
+    if (startupHookRan) {
+      if (!briefingCompacted) return;
+      briefingCompacted = false;
+      if (!briefing || briefingInContext(ctx)) return;
+      return gortexMessage(briefing, true);
+    }
     startupHookRan = true; // before the first await, so a second turn can't race in
     // Pi awaits each listener, so this holds the turn until the tools are
     // registered and bridgeError reflects the handshake (or the cap expires).
@@ -302,30 +346,15 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
       parts.push(versionWarning);
       setVersionWarning("");
     }
-    if (decision.orientation) parts.push(decision.orientation);
-    if (parts.length > 0) pendingOrientation = parts.join("\n\n");
-    return;
-  });
-
-  // Fires before each LLM call with a mutable message array. Appends the
-  // parked orientation once, clearing it only after the push lands so the
-  // orientation survives a context shape this hook can't append to.
-  // Pi exports ContextEvent but not its result type, so it is spelled out here.
-  pi.on("context", (event: ContextEvent): { messages?: ContextEvent["messages"] } | void => {
-    if (!pendingOrientation) return;
-    try {
-      const messages = (event as { messages?: unknown })?.messages;
-      if (Array.isArray(messages)) {
-        // Pi's AgentMessage also carries a `timestamp`; only the two fields
-        // Pi reads for a tail user turn are pushed.
-        messages.push({ role: "user", content: pendingOrientation } as ContextEvent["messages"][number]);
-        pendingOrientation = "";
-        return { messages: messages as ContextEvent["messages"] };
-      }
-    } catch {
-      // best effort; never break context assembly.
+    let briefed = false;
+    if (decision.orientation) {
+      briefing = decision.orientation;
+      // A resumed or reloaded session already holds it.
+      briefed = !briefingInContext(ctx);
+      if (briefed) parts.push(decision.orientation);
     }
-    return;
+    if (parts.length === 0) return;
+    return gortexMessage(parts.join("\n\n"), briefed);
   });
 
   // Never let the bridge child outlive the session.
