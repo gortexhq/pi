@@ -13,5 +13,6 @@ Closes #
 ## Checklist
 
 - [ ] No runtime dependencies added
-- [ ] README configuration table and `docs/architecture.md` updated, if behaviour or config changed
+- [ ] README configuration table updated, if config changed
+- [ ] `docs/architecture.md` updated briefly, only if a design decision changed
 - [ ] Works on Windows paths and process spawning, if touching either

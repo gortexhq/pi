@@ -399,9 +399,10 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
   };
   if (config.enforce) pi.on("tool_call", enforceReadDiscipline);
 
-  // Edit diffs on Pi's built-in MCP, after enforcement so a blocked call is never snapshotted.
+  // After enforcement, so a blocked call is never snapshotted. Shell calls are
+  // tracked on both channels; edits are snapshotted on Pi's built-in MCP only.
+  watchNativeEdits(pi, () => native);
   if (native) {
-    watchNativeEdits(pi, () => native);
     // Pi < 1.0.1 has no tool renderers; the diffs are still stored.
     try {
       (pi as Partial<Pick<ExtensionAPI, "registerToolRenderer">>).registerToolRenderer?.(nativeRenderers);

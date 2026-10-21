@@ -140,12 +140,26 @@ function tempDirs(): { cwd: string; agentDir: string } {
   return { cwd, agentDir };
 }
 
+export interface HarnessLayout {
+  /** A session to continue, the way /reload or a resume does. */
+  session?: SessionManager;
+  /** Run Pi from this directory under a git repo root, instead of from the root. */
+  repoSubdir?: string;
+}
+
 export async function createHarness(
   factory: Factory,
   options: GortexExtensionOptions = {},
-  session?: SessionManager,
+  { session, repoSubdir }: HarnessLayout = {},
 ): Promise<Harness> {
-  const { cwd, agentDir } = tempDirs();
+  const dirs = tempDirs();
+  const { agentDir } = dirs;
+  let cwd = dirs.cwd;
+  if (repoSubdir) {
+    mkdirSync(join(cwd, ".git"));
+    cwd = join(cwd, repoSubdir);
+    mkdirSync(cwd, { recursive: true });
+  }
   const loader = new DefaultResourceLoader({
     cwd,
     agentDir,
