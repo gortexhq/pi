@@ -120,11 +120,21 @@ behaviour identical across hosts.
 
 ## Orientation injection
 
-The session briefing rides a tail user message appended during context assembly.
-Carrying it in the system prompt would place it at the head of the conversation,
-where a change invalidates prefix prompt caching on every turn. The text is
-computed once per session and cleared only once it has been appended, so a
-context shape the extension cannot append to does not silently drop it.
+The session briefing is returned from the first turn's `before_agent_start` as a
+hidden custom message (`customType: "gortex"`). Pi stores it in the session
+right after the prompt, so every later LLM call carries it. Carrying it in the
+system prompt would place it at the head of the conversation, where a change
+invalidates prefix prompt caching.
+
+The hook is shelled once per session. A resumed or reloaded session already
+holds a briefing, so it is not stored twice. After a compaction summarises it
+away, the next turn stores the same text again.
+
+## Withdrawn tools
+
+Pi has no way to unregister a tool. When a `tools/list_changed` re-fetch no
+longer lists a registered Gortex tool, the bridge drops it from Pi's active
+tool set, and adds it back if the daemon lists it again.
 
 ## The readiness barrier
 

@@ -21,10 +21,11 @@ import { ORIENTATION, TOOLS, delay, options } from "./support/fixtures.ts";
 
 describe("a turn arriving mid-handshake", () => {
   let harness: Harness;
-  let held: number;
+  let toolsAtRelease: number;
   let turn1: ContextMessage[];
   let turn2: ContextMessage[];
   let turn3: ContextMessage[];
+  let seenLater: ContextMessage[];
 
   before(async () => {
     resetInitializeAttempts();
@@ -40,19 +41,19 @@ describe("a turn arriving mid-handshake", () => {
     // Nothing awaits this, exactly how Pi reaches before_agent_start at startup.
     const started = harness.sessionStart();
 
-    const t0 = Date.now();
     await harness.turn();
-    held = Date.now() - t0;
+    toolsAtRelease = harness.tools().length;
     await started;
 
     turn1 = await harness.context();
     turn2 = await harness.context();
     await harness.turn();
     turn3 = await harness.context();
+    seenLater = harness.modelContext();
   });
 
   it("is held for the whole handshake", () => {
-    assert.ok(held >= 500, `released after ${held}ms of a 300+300ms handshake`);
+    assert.equal(toolsAtRelease, 3, "the turn was released before the tools registered");
   });
 
   it("finds the tools live at the first LLM call", () => {
@@ -64,12 +65,17 @@ describe("a turn arriving mid-handshake", () => {
     assert.ok(turn1[0]!.content.includes(ORIENTATION));
   });
 
-  it("injects nothing on a later push", () => {
+  it("adds it only once", () => {
     assert.equal(turn2.length, 0);
   });
 
   it("injects nothing on a second before_agent_start", () => {
     assert.equal(turn3.length, 0);
+  });
+
+  it("keeps it in front of the model on later LLM calls", () => {
+    assert.equal(seenLater.length, 1);
+    assert.ok(seenLater[0]!.content.includes(ORIENTATION));
   });
 
   it("raises no extension errors", () => {
@@ -172,5 +178,92 @@ describe("a healthy session whose hook returns nothing to inject", () => {
       String(c.input ?? "").includes('"event":"session_start"'),
     );
     assert.equal(calls.length, 1, `shelled ${calls.length}x`);
+  });
+});
+
+describe("a compaction that summarises the briefing away", () => {
+  let harness: Harness;
+  let resent: ContextMessage[];
+  let afterThat: ContextMessage[];
+
+  before(async () => {
+    resetInitializeAttempts();
+    control.reset({ tools: TOOLS, hookDecision: { orientation: ORIENTATION } });
+
+    harness = await createHarness(await loadFactory(4), options());
+    await harness.sessionStart();
+    await harness.turn();
+    await harness.context();
+
+    await harness.compact();
+    await harness.turn();
+    resent = await harness.context();
+    await harness.turn();
+    afterThat = await harness.context();
+  });
+
+  it("sends it again on the next turn", () => {
+    assert.equal(resent.length, 1);
+    assert.ok(resent[0]!.content.includes(ORIENTATION));
+    assert.equal(harness.modelContext().length, 1);
+  });
+
+  it("sends it only once", () => {
+    assert.equal(afterThat.length, 0);
+  });
+
+  it("does not shell the hook again", () => {
+    const calls = control.hookCalls.filter((c) => String(c.input ?? "").includes('"event":"session_start"'));
+    assert.equal(calls.length, 1);
+  });
+});
+
+describe("a compaction that keeps the briefing", () => {
+  let harness: Harness;
+  let injected: ContextMessage[];
+
+  before(async () => {
+    resetInitializeAttempts();
+    control.reset({ tools: TOOLS, hookDecision: { orientation: ORIENTATION } });
+
+    harness = await createHarness(await loadFactory(5), options());
+    await harness.sessionStart();
+    await harness.turn();
+    await harness.context();
+    const briefingEntry = harness.session.getLeafId();
+
+    await harness.compact(briefingEntry);
+    await harness.turn();
+    injected = await harness.context();
+  });
+
+  it("does not send a second copy", () => {
+    assert.equal(injected.length, 0);
+    assert.equal(harness.modelContext().length, 1);
+  });
+});
+
+describe("a reloaded session that already holds the briefing", () => {
+  let reloaded: Harness;
+  let injected: ContextMessage[];
+
+  before(async () => {
+    resetInitializeAttempts();
+    control.reset({ tools: TOOLS, hookDecision: { orientation: ORIENTATION } });
+
+    const first = await createHarness(await loadFactory(6), options());
+    await first.sessionStart();
+    await first.turn();
+    await first.sessionShutdown("reload");
+
+    reloaded = await createHarness(await loadFactory(7), options(), first.session);
+    await reloaded.sessionStart("reload");
+    await reloaded.turn();
+    injected = await reloaded.context();
+  });
+
+  it("does not send a second copy", () => {
+    assert.equal(injected.length, 0);
+    assert.equal(reloaded.modelContext().length, 1);
   });
 });

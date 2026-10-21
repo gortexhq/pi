@@ -33,6 +33,13 @@ let versionWarning = "";
  */
 export const gortexToolNames = new Set<string>();
 
+/**
+ * Registered names the daemon has since dropped from its list. Pi cannot
+ * unregister a tool, so these are switched off in the active set instead, and
+ * back on if the daemon lists them again.
+ */
+export const withdrawnToolNames = new Set<string>();
+
 export function getClient(): MCPStdioClient | null {
   return client;
 }

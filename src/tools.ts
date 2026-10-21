@@ -9,7 +9,7 @@ import type { FileDiff } from "./diff.ts";
 import type { ToolDescriptor } from "./mcp-client.ts";
 import { callRenderer, readCallRenderer, renderResult, resultText } from "./render.ts";
 import type { RenderCall, RenderResult } from "./render.ts";
-import { getClient, gortexToolNames } from "./state.ts";
+import { getClient, gortexToolNames, withdrawnToolNames } from "./state.ts";
 import { toolNameMap } from "./hook.ts";
 
 // Pi's reserved built-in names (mirrors toolNameMap's keys). A bridge tool that
@@ -132,13 +132,36 @@ export function registerOneTool(pi: ExtensionAPI, desc: ToolDescriptor): void {
 export async function registerGortexTools(pi: ExtensionAPI): Promise<void> {
   const client = getClient();
   if (!client) return;
+  const listed = new Set<string>();
   for (const desc of await client.listTools()) {
-    if (!desc) continue;
+    if (!desc?.name) continue;
     registerOneTool(pi, desc);
+    listed.add(piAliasName(desc.name));
+  }
+  matchActiveTools(pi, listed);
+}
+
+/** Keeps the tools offered to the model in step with the daemon's list. */
+function matchActiveTools(pi: ExtensionAPI, listed: Set<string>): void {
+  const dropped = [...gortexToolNames].filter((name) => !listed.has(name));
+  const relisted = [...withdrawnToolNames].filter((name) => listed.has(name));
+  if (dropped.length === 0 && relisted.length === 0) return;
+  for (const name of dropped) {
+    gortexToolNames.delete(name);
+    withdrawnToolNames.add(name);
+  }
+  for (const name of relisted) withdrawnToolNames.delete(name);
+  try {
+    const active = new Set(pi.getActiveTools());
+    for (const name of dropped) active.delete(name);
+    for (const name of relisted) active.add(name);
+    pi.setActiveTools([...active]);
+  } catch {
+    // an invalidated instance keeps its last tool set.
   }
 }
 
-/** Re-fetches the tool list after a list_changed and registers anything new. */
+/** Re-fetches the tool list after a list_changed and applies the difference. */
 export async function syncTools(pi: ExtensionAPI): Promise<void> {
   try {
     await registerGortexTools(pi);

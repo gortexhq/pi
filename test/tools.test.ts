@@ -224,3 +224,44 @@ describe("a tool call as Pi renders it", () => {
     assert.equal(text.replace(/\s/g, ""), "searchtext" + query);
   });
 });
+
+// Pi has no unregisterTool, so a tool the daemon withdraws has to leave the
+// active set, or the model keeps calling a tool the daemon no longer serves.
+describe("a tool the daemon withdraws, then lists again", () => {
+  const TOOLS_SEARCH = { name: "tools_search", description: "Find tools.", inputSchema: { type: "object", properties: {} } };
+  let harness: Harness;
+  let afterWithdraw: string[];
+  let afterRelist: string[];
+
+  const promote = () =>
+    harness.tool("tools_search")!.execute("call-1", {}, undefined, undefined, harness.runner.createContext() as never);
+
+  before(async () => {
+    resetInitializeAttempts();
+    control.reset({ tools: [...TOOLS, TOOLS_SEARCH], hookDecision: { orientation: ORIENTATION } });
+
+    harness = await createHarness(await loadFactory(9), options());
+    await harness.sessionStart();
+
+    control.tools = [...TOOLS.filter((t) => t.name !== "search"), TOOLS_SEARCH];
+    await promote();
+    afterWithdraw = harness.activeTools();
+
+    control.tools = [...TOOLS, TOOLS_SEARCH];
+    await promote();
+    afterRelist = harness.activeTools();
+  });
+
+  it("is no longer offered to the model", () => {
+    assert.ok(!afterWithdraw.includes("search"), afterWithdraw.join(","));
+    assert.ok(afterWithdraw.includes("gortex_read"));
+  });
+
+  it("is offered again once the daemon relists it", () => {
+    assert.ok(afterRelist.includes("search"), afterRelist.join(","));
+  });
+
+  it("raises no extension errors", () => {
+    assert.deepEqual(harness.errors, []);
+  });
+});

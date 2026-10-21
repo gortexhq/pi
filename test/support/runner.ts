@@ -70,12 +70,22 @@ export interface Harness {
   sessionStart(reason?: string): Promise<unknown>;
   /** session_shutdown, as Pi emits it before tearing the extension runtime down. */
   sessionShutdown(reason?: "quit" | "reload" | "new" | "resume" | "fork"): Promise<unknown>;
-  /** before_agent_start: the turn the readiness barrier holds. */
+  /**
+   * before_agent_start: the turn the readiness barrier holds. Stores the prompt
+   * and any message the extension returns in the session, as Pi does.
+   */
   turn(prompt?: string): Promise<unknown>;
-  /** One context assembly pass; returns the messages the extension appended. */
+  /** The messages the extension added since the previous call. */
   context(): Promise<ContextMessage[]>;
+  /** The extension's messages among what the next LLM call would see. */
+  modelContext(): ContextMessage[];
+  /** session_compact after a compaction keeping the entries from `keepFrom` on (none by default). */
+  compact(keepFrom?: string | null): Promise<unknown>;
+  session: SessionManager;
   toolCall(toolName: string, input: Record<string, unknown>): Promise<ToolCallEventResult | undefined>;
   tools(): string[];
+  /** The tools offered to the model. */
+  activeTools(): string[];
   tool(name: string): RegisteredTool["definition"] | undefined;
   /** The files Pi loaded this extension from. */
   extensionPaths(): string[];
@@ -88,8 +98,18 @@ export interface Harness {
 // Only the members this extension touches are implemented; the rest stay
 // unwired, which is what pi-mono's own runner tests do. Typing the partial
 // keeps sendMessage checked against Pi's real SendMessageHandler.
-function extensionActions(sent: unknown[], runner: () => ExtensionRunner): ExtensionActions {
+function extensionActions(
+  sent: unknown[],
+  runner: () => ExtensionRunner,
+  active: { names: string[] | null },
+): ExtensionActions {
+  const registered = () => runner().getAllRegisteredTools().map((t) => t.definition.name);
   const partial: Partial<ExtensionActions> = {
+    // Pi activates every extension tool unless the active set was narrowed.
+    getActiveTools: () => active.names ?? registered(),
+    setActiveTools: (names) => {
+      active.names = [...names];
+    },
     sendMessage: (message) => {
       sent.push(message);
     },
@@ -123,6 +143,7 @@ function tempDirs(): { cwd: string; agentDir: string } {
 export async function createHarness(
   factory: Factory,
   options: GortexExtensionOptions = {},
+  session?: SessionManager,
 ): Promise<Harness> {
   const { cwd, agentDir } = tempDirs();
   const loader = new DefaultResourceLoader({
@@ -142,7 +163,7 @@ export async function createHarness(
     throw new Error(`extension failed to load: ${JSON.stringify(loadErrors)}`);
   }
 
-  return buildHarness(extensions, runtime, cwd);
+  return buildHarness(extensions, runtime, cwd, session);
 }
 
 /**
@@ -166,20 +187,27 @@ export async function createPackagedHarness(packageRoot: string): Promise<Harnes
   return buildHarness(extensions, runtime, cwd);
 }
 
-function buildHarness(extensions: Extension[], runtime: ExtensionRuntime, cwd: string): Harness {
+function buildHarness(
+  extensions: Extension[],
+  runtime: ExtensionRuntime,
+  cwd: string,
+  session: SessionManager = SessionManager.inMemory(cwd),
+): Harness {
   const sent: unknown[] = [];
   const errors: ExtensionError[] = [];
+  let added: ContextMessage[] = [];
   const runner = new ExtensionRunner(
     extensions,
     runtime,
     cwd,
-    SessionManager.inMemory(cwd),
+    session,
     // Never read by this extension; constructing a real one would reach for
     // the user's auth.json and the model catalog.
     new ModelRegistry(undefined as never),
   );
   runner.onError((err) => errors.push(err));
-  runner.bindCore(extensionActions(sent, () => runner), extensionContextActions());
+  const active: { names: string[] | null } = { names: null };
+  runner.bindCore(extensionActions(sent, () => runner, active), extensionContextActions());
 
   // Without a UI context the runner reports hasUI false, so the extension's
   // user-facing warnings would be skipped rather than asserted on.
@@ -203,17 +231,45 @@ function buildHarness(extensions: Extension[], runtime: ExtensionRuntime, cwd: s
     sessionShutdown(reason: "quit" | "reload" | "new" | "resume" | "fork" = "quit") {
       return runner.emit({ type: "session_shutdown", reason } as Parameters<ExtensionRunner["emit"]>[0]);
     },
-    turn(prompt = "go") {
-      return runner.emitBeforeAgentStart(prompt, undefined, {} as never);
+    session,
+    async turn(prompt = "go") {
+      const result = await runner.emitBeforeAgentStart(prompt, undefined, {} as never);
+      session.appendMessage({ role: "user", content: prompt, timestamp: Date.now() });
+      for (const message of result.messages) {
+        session.appendCustomMessageEntry(message.customType, message.content, message.display, message.details);
+        added.push({ role: "user", content: String(message.content) });
+      }
+      return result;
     },
     async context() {
-      return (await runner.emitContext([])) as unknown as ContextMessage[];
+      const out = added;
+      added = [];
+      return out;
+    },
+    modelContext() {
+      return session
+        .buildContextEntries()
+        .filter((entry) => entry.type === "custom_message" && entry.customType === "gortex")
+        .map((entry) => ({ role: "user", content: String((entry as { content: unknown }).content) }));
+    },
+    compact(keepFrom = null) {
+      const compactionEntry = session.getEntry(session.appendCompaction("summary", keepFrom, 0));
+      return runner.emit({
+        type: "session_compact",
+        compactionEntry,
+        fromExtension: false,
+        reason: "manual",
+        willRetry: false,
+      } as Parameters<ExtensionRunner["emit"]>[0]);
     },
     toolCall(toolName, input) {
       return runner.emitToolCall({ type: "tool_call", toolName, input } as Parameters<ExtensionRunner["emitToolCall"]>[0]);
     },
     tools() {
       return runner.getAllRegisteredTools().map((t) => t.definition.name);
+    },
+    activeTools() {
+      return active.names ?? runner.getAllRegisteredTools().map((t) => t.definition.name);
     },
     tool(name) {
       return runner.getToolDefinition(name);

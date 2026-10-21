@@ -18,21 +18,19 @@ import assert from "node:assert/strict";
 
 import { loadFactory } from "./support/subject.ts";
 import { createHarness } from "./support/runner.ts";
-import type { Harness } from "./support/runner.ts";
+import type { ContextMessage, Harness } from "./support/runner.ts";
 import { control, resetInitializeAttempts } from "./support/child-process-mock.ts";
-import { ORIENTATION, TOOLS, delay, options, startGatedSession } from "./support/fixtures.ts";
+import { ORIENTATION, TOOLS, options, startGatedSession } from "./support/fixtures.ts";
 
 describe("a stale session_start settling mid-turn", () => {
   let harness: Harness;
-  let releasedWhenAFinished: number;
-  let released: number;
-  let aFinishedAt: number;
+  let injected: ContextMessage[];
 
   before(async () => {
     resetInitializeAttempts();
     control.reset({ tools: TOOLS, hookDecision: { orientation: ORIENTATION } });
 
-    harness = await createHarness(await loadFactory(0), options());
+    harness = await createHarness(await loadFactory(0), options({ readyWaitMs: 1_000 }));
 
     // A: superseded by B, so its start() rejects, backs off and retries. It
     // settles on its own schedule; nothing here depends on when.
@@ -41,40 +39,22 @@ describe("a stale session_start settling mid-turn", () => {
     // B: fast, and overlaps A.
     await harness.sessionStart("new");
 
-    // C: gated, so it is guaranteed to still be running when A settles.
-    // Ordering is structural: A is awaited before C is ever released.
+    // C: gated until the turn is over, so only the readiness cap can release
+    // the turn. A stale release would skip the cap's warning.
     const { settled: c, child: cChild } = startGatedSession(harness, "reload");
 
-    const t0 = Date.now();
-    released = 0;
-    const turn = harness.turn().then(() => {
-      released = Date.now() - t0;
-    });
-
+    const turn = harness.turn();
     await a;
-    aFinishedAt = Date.now() - t0;
-
-    // A settling releases the turn through a then(), so give that a full tick
-    // to land before reading. C stays gated throughout, so correct code has
-    // nothing that could release the turn no matter how long this waits.
-    await delay(20);
-    releasedWhenAFinished = released;
+    await turn;
+    injected = await harness.context();
 
     cChild.releaseReplies();
-    await turn;
     await c;
   });
 
   it("does not release the parked turn when the stale invocation settles", () => {
-    assert.equal(
-      releasedWhenAFinished,
-      0,
-      `released at ${releasedWhenAFinished}ms, while A settled at ${aFinishedAt}ms and C was still gated`,
-    );
-  });
-
-  it("releases the turn once the invocation it parked on finishes", () => {
-    assert.ok(released > 0, "the turn never resumed");
+    assert.equal(injected.length, 1);
+    assert.match(injected[0]!.content, /still registering/);
   });
 
   it("leaves the newest session's tools live", () => {

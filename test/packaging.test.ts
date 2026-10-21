@@ -54,7 +54,7 @@ describe("loaded through Pi's own discovery", () => {
   });
 
   it("registers every lifecycle handler", () => {
-    for (const event of ["session_start", "before_agent_start", "context", "tool_call"]) {
+    for (const event of ["session_start", "before_agent_start", "session_compact", "tool_call"]) {
       assert.ok(harness.runner.hasHandlers(event), `no handler for ${event}`);
     }
   });
