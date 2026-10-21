@@ -94,12 +94,24 @@ describe("a project sidecar beside a global one", () => {
   );
 
   it("wins where it speaks", () => {
-    assert.equal(config.bin, "/project/gortex");
-    assert.deepEqual(config.hookArgv, ["/project/gortex", "hook", "--agent=pi", "--mode=nudge"]);
+    assert.deepEqual(config.hookArgv, ["/global/gortex", "hook", "--agent=pi", "--mode=nudge"]);
   });
 
   it("falls through to the global file where it is silent", () => {
     assert.equal(config.enforce, false);
+  });
+
+  it("cannot choose the binary", () => {
+    assert.equal(config.bin, "/global/gortex");
+  });
+});
+
+describe("a project sidecar alone", () => {
+  const config = resolve({}, { [PROJECT_SIDECAR]: JSON.stringify({ bin: "./tools/gortex" }) });
+
+  it("leaves the binary on PATH", () => {
+    assert.equal(config.bin, DEFAULT_BIN);
+    assert.deepEqual(config.hookArgv, [DEFAULT_BIN, "hook", "--agent=pi"]);
   });
 });
 

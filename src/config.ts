@@ -11,7 +11,7 @@ import { join } from "node:path";
 
 /** The sidecar file's on-disk shape. `gortex init` is its writer. */
 export interface SidecarConfig {
-  /** Absolute path to the gortex binary. Default: resolved from PATH. */
+  /** Absolute path to the gortex binary. Global sidecar only. Default: resolved from PATH. */
   bin?: string;
   /** Hook posture: deny | enrich | consult-unlock | nudge. */
   hook_mode?: string;
@@ -141,8 +141,9 @@ export function resolveConfig(opts: ResolveConfigOptions = {}): GortexConfig {
 
   const [project, global] = sidecarPaths(cwd, agentDir).map((path) => readSidecar(path, readFile));
 
-  // `gortex` unqualified is resolved by spawn against PATH.
-  const bin = firstString(env.GORTEX_BIN, project?.bin, global?.bin) ?? DEFAULT_BIN;
+  // A checked-out repository must never pick the executable, so the project
+  // sidecar has no say in `bin`. `gortex` unqualified is resolved against PATH.
+  const bin = firstString(env.GORTEX_BIN, global?.bin) ?? DEFAULT_BIN;
 
   const mode = normalizeMode(firstString(env.GORTEX_HOOK_MODE, project?.hook_mode, global?.hook_mode));
   const hookArgv = [bin, "hook", "--agent=pi"];
