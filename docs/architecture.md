@@ -68,15 +68,15 @@ implementation forwards the call down that channel.
   arrive in bursts, so the re-sync is debounced; a search call awaits its own
   re-sync directly, so every tool its reply names is callable by the time the
   model reads it.
-- **Framing.** Reads are incremental. The scan for a frame boundary resumes
-  where the previous chunk ended, so one large frame split across many chunks
-  does not re-scan a growing buffer each time. A frame past a generous size cap
-  kills the child, because a stream cannot be resynced mid-frame, and the next
-  call respawns it.
+- **Framing.** Frames are cut at the newline byte and decoded whole, so a
+  character split across chunks arrives intact. A frame past a generous byte
+  cap kills the child, because a stream cannot be resynced mid-frame, and the
+  next call respawns it.
 - **Timeouts.** Every request is bounded: a short cap for ordinary requests, a
   longer one for the handshake, the longest for tool calls. The last is generous
   enough for analyzers that legitimately run for minutes, and finite so a wedged
-  daemon cannot hang an agent turn forever.
+  daemon cannot hang an agent turn forever. A call dropped on timeout or on
+  Pi's abort tells the daemon to cancel it.
 
 ### Tool-name aliasing
 

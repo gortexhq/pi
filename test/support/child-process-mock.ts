@@ -27,6 +27,7 @@ export interface Control {
   failFirstInitialize: boolean;
   holdNextChild: boolean;
   onToolCall: ((name: string, args: Record<string, unknown>) => unknown) | undefined;
+  onToolCallFrame: ((child: FakeChild, id: number) => void) | undefined;
   serverVersion: string | null;
   protocolVersion: string;
   spawns: SpawnRecord[];
@@ -58,6 +59,9 @@ export const control: Control = {
   // Answers tools/call in place of the plain "ok" reply, and may act on disk
   // the way the daemon would.
   onToolCall: undefined,
+  // Takes over tools/call entirely: the child sends nothing itself, and the
+  // suite writes whatever frames it needs through child.write().
+  onToolCallFrame: undefined,
 
   // Observations.
   spawns: [] as SpawnRecord[],
@@ -72,6 +76,7 @@ export const control: Control = {
     this.failFirstInitialize = false;
     this.holdNextChild = false;
     this.onToolCall = undefined;
+    this.onToolCallFrame = undefined;
     this.serverVersion = "0.64.4";
     this.protocolVersion = "2025-06-18";
     this.spawns = [];
@@ -103,6 +108,13 @@ export class FakeChild extends EventEmitter {
   exited = false;
   held = false;
   pending: Deferred[] = [];
+  // Every frame the client wrote, notifications and replies included.
+  received: Record<string, unknown>[] = [];
+
+  /** Writes raw bytes to the client's stdout as one data event. */
+  write(bytes: Buffer | string): void {
+    this.stdout.emit("data", Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes, "utf8"));
+  }
 
   private reply(obj: unknown, delayMs: number): void {
     const send = () => {
@@ -135,8 +147,9 @@ export class FakeChild extends EventEmitter {
     } catch {
       return true;
     }
-    // Notifications carry no id and get no reply.
-    if (typeof msg.id !== "number") return true;
+    this.received.push(msg as Record<string, unknown>);
+    // Notifications and replies to server requests get no reply.
+    if (typeof msg.id !== "number" || typeof msg.method !== "string") return true;
 
     if (msg.method === "initialize") {
       initializeAttempts += 1;
@@ -164,6 +177,10 @@ export class FakeChild extends EventEmitter {
     }
 
     if (msg.method === "tools/call") {
+      if (control.onToolCallFrame) {
+        control.onToolCallFrame(this, msg.id);
+        return true;
+      }
       const params = (msg as { params?: { name?: string; arguments?: Record<string, unknown> } }).params ?? {};
       const result = control.onToolCall?.(params.name ?? "", params.arguments ?? {}) ?? {
         content: [{ type: "text", text: "ok" }],

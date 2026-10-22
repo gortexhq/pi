@@ -76,12 +76,33 @@ export interface MCPStdioClientOptions {
   toolsPreset: string;
   deps: ProcessDeps;
   env?: Record<string, string | undefined>;
+  callTimeoutMs?: number;
+  maxFrameBytes?: number;
 }
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
   timer?: ReturnType<typeof setTimeout>;
+}
+
+/** A JSON-RPC error reply, with the server's code and data kept for the model. */
+export class JsonRpcError extends Error {
+  readonly code: number | undefined;
+  readonly data: unknown;
+
+  constructor(error: { code?: unknown; message?: unknown; data?: unknown }) {
+    const code = typeof error.code === "number" ? error.code : undefined;
+    let message = typeof error.message === "string" && error.message ? error.message : "JSON-RPC error";
+    if (code !== undefined) message += ` (${code})`;
+    if (error.data !== undefined) {
+      message += `: ${typeof error.data === "string" ? error.data : JSON.stringify(error.data)}`;
+    }
+    super(message);
+    this.name = "JsonRpcError";
+    this.code = code;
+    this.data = error.data;
+  }
 }
 
 export interface ToolDescriptor {
@@ -127,8 +148,10 @@ export function textFromResult(result: unknown): string {
 
 export class MCPStdioClient {
   private child: BridgeChild | null = null;
-  private buffer = "";
-  private searchStart = 0;
+  // Raw bytes of the frame still being read. Frames are cut at the 0x0A byte
+  // and decoded whole, so a character split across chunks survives.
+  private chunks: Buffer[] = [];
+  private bufferedBytes = 0;
   private nextId = 1;
   private pending = new Map<number, PendingRequest>();
   private exited = true;
@@ -138,6 +161,8 @@ export class MCPStdioClient {
   private readonly toolsPreset: string;
   private readonly deps: ProcessDeps;
   private readonly env: Record<string, string | undefined>;
+  private readonly callTimeoutMs: number;
+  private readonly maxFrameBytes: number;
 
   // Fired on notifications/tools/list_changed (server-side promotion).
   onToolsListChanged: (() => void) | null = null;
@@ -152,6 +177,8 @@ export class MCPStdioClient {
     this.toolsPreset = options.toolsPreset;
     this.deps = options.deps;
     this.env = options.env ?? process.env;
+    this.callTimeoutMs = options.callTimeoutMs ?? CALL_TIMEOUT_MS;
+    this.maxFrameBytes = options.maxFrameBytes ?? MAX_BUFFER_BYTES;
   }
 
   private childEnv(): Record<string, string | undefined> {
@@ -164,8 +191,8 @@ export class MCPStdioClient {
       env: this.childEnv(),
     });
     this.child = child;
-    this.buffer = "";
-    this.searchStart = 0;
+    this.chunks = [];
+    this.bufferedBytes = 0;
     this.exited = false;
     child.stdout?.on("data", (chunk: unknown) => this.onData(chunk as Buffer));
     // Consume stderr so the child never blocks on a full pipe; routing it
@@ -185,68 +212,93 @@ export class MCPStdioClient {
     if (this.exited && this.pending.size === 0) return;
     this.exited = true;
     this.child = null;
-    for (const [, p] of this.pending) {
-      if (p.timer) clearTimeout(p.timer);
-      p.reject(err);
-    }
+    const pending = [...this.pending.values()];
     this.pending.clear();
+    for (const p of pending) p.reject(err);
   }
 
   private onData(chunk: Buffer): void {
-    this.buffer += chunk.toString("utf8");
+    let start = 0;
     let nl: number;
-    // Resume the newline scan where the previous chunk left off, so a
-    // large frame split across many chunks does not re-scan the whole
-    // growing buffer from index 0 on every data event.
-    while ((nl = this.buffer.indexOf("\n", this.searchStart)) >= 0) {
-      const line = this.buffer.slice(0, nl).trim();
-      this.buffer = this.buffer.slice(nl + 1);
-      this.searchStart = 0;
-      if (!line) continue;
-      let msg: unknown;
-      try {
-        msg = JSON.parse(line);
-      } catch {
-        continue; // non-JSON noise, ignore
-      }
-      this.dispatch(msg);
+    while ((nl = chunk.indexOf(0x0a, start)) >= 0) {
+      if (this.bufferedBytes + nl - start > this.maxFrameBytes) return this.overflow();
+      const tail = chunk.subarray(start, nl);
+      const frame = this.chunks.length > 0 ? Buffer.concat([...this.chunks, tail]) : tail;
+      this.chunks = [];
+      this.bufferedBytes = 0;
+      start = nl + 1;
+      this.onFrame(frame.toString("utf8").trim());
     }
-    this.searchStart = this.buffer.length;
-    if (this.buffer.length > MAX_BUFFER_BYTES) {
-      // One frame past the cap is fatal for this child (no way to
-      // resync mid-frame): pending requests reject, the next call
-      // respawns a fresh child.
-      this.buffer = "";
-      this.searchStart = 0;
-      const child = this.child;
-      this.markExited(new Error(`gortex mcp frame exceeded ${MAX_BUFFER_BYTES} bytes`));
-      try {
-        child?.kill();
-      } catch {
-        // already gone
-      }
+    if (start >= chunk.length) return;
+    this.chunks.push(start === 0 ? chunk : chunk.subarray(start));
+    this.bufferedBytes += chunk.length - start;
+    if (this.bufferedBytes > this.maxFrameBytes) this.overflow();
+  }
+
+  // One frame past the cap is fatal for this child (no way to resync
+  // mid-frame): pending requests reject, the next call respawns a fresh child.
+  private overflow(): void {
+    this.chunks = [];
+    this.bufferedBytes = 0;
+    const child = this.child;
+    this.markExited(new Error(`gortex mcp frame exceeded ${this.maxFrameBytes} bytes`));
+    try {
+      child?.kill();
+    } catch {
+      // already gone
     }
   }
 
-  private dispatch(msg: unknown): void {
-    const frame = msg as { id?: unknown; error?: { code?: number; message?: string }; result?: unknown; method?: unknown };
-    if (frame && typeof frame.id === "number" && this.pending.has(frame.id)) {
-      const p = this.pending.get(frame.id)!;
-      this.pending.delete(frame.id);
-      if (p.timer) clearTimeout(p.timer);
-      if (frame.error) {
-        p.reject(new Error(frame.error.message || `JSON-RPC error ${frame.error.code}`));
-      } else {
-        p.resolve(frame.result);
+  private onFrame(line: string): void {
+    if (!line) return;
+    let msg: unknown;
+    try {
+      msg = JSON.parse(line);
+    } catch {
+      return; // non-JSON noise, ignore
+    }
+    if (msg && typeof msg === "object") this.dispatch(msg as Record<string, unknown>);
+  }
+
+  private dispatch(frame: Record<string, unknown>): void {
+    const { id, method } = frame;
+    if (typeof method === "string") {
+      if (typeof id === "number" || typeof id === "string") this.answerServerRequest(id, method);
+      else if (method === "notifications/tools/list_changed") {
+        try {
+          this.onToolsListChanged?.();
+        } catch {
+          // best effort; never break the read loop.
+        }
       }
       return;
     }
-    if (frame && frame.method === "notifications/tools/list_changed") {
-      try {
-        this.onToolsListChanged?.();
-      } catch {
-        // best effort; never break the read loop.
-      }
+    const error = frame.error as Record<string, unknown> | undefined;
+    if (id === null && error) {
+      // The server could not tell which request this answers, so none of
+      // them will get a reply.
+      const pending = [...this.pending.values()];
+      this.pending.clear();
+      for (const p of pending) p.reject(new JsonRpcError(error));
+      return;
+    }
+    if (typeof id !== "number") return;
+    const p = this.pending.get(id);
+    if (!p) return;
+    this.pending.delete(id);
+    if (error) p.reject(new JsonRpcError(error));
+    else p.resolve(frame.result);
+  }
+
+  private answerServerRequest(id: number | string, method: string): void {
+    const reply =
+      method === "ping"
+        ? { jsonrpc: "2.0", id, result: {} }
+        : { jsonrpc: "2.0", id, error: { code: -32601, message: `Method not found: ${method}` } };
+    try {
+      this.send(reply);
+    } catch {
+      // the child is gone; nothing is waiting on the answer.
     }
   }
 
@@ -270,24 +322,54 @@ export class MCPStdioClient {
     return this.respawnPromise;
   }
 
-  async request(method: string, params: unknown, timeoutMs: number = RPC_TIMEOUT_MS): Promise<unknown> {
+  /**
+   * Sends one request. On abort or timeout the call is dropped and the server
+   * is sent notifications/cancelled, so a late reply is ignored.
+   */
+  async request(
+    method: string,
+    params: unknown,
+    timeoutMs: number = RPC_TIMEOUT_MS,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    const aborted = () => new Error(`${method} aborted`);
+    if (signal?.aborted) throw aborted();
     if (this.exited) await this.respawn();
+    if (signal?.aborted) throw aborted();
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
-      const entry: PendingRequest = { resolve, reject };
+      const onAbort = () => abandon(aborted());
+      const settled = () => {
+        if (entry.timer) clearTimeout(entry.timer);
+        signal?.removeEventListener("abort", onAbort);
+      };
+      const entry: PendingRequest = {
+        resolve: (value) => {
+          settled();
+          resolve(value);
+        },
+        reject: (err) => {
+          settled();
+          reject(err);
+        },
+      };
+      const abandon = (err: Error) => {
+        if (this.pending.get(id) !== entry) return;
+        this.pending.delete(id);
+        entry.reject(err);
+        // The MCP spec forbids cancelling initialize.
+        if (method !== "initialize") this.notify("notifications/cancelled", { requestId: id, reason: err.message });
+      };
       if (Number.isFinite(timeoutMs)) {
-        entry.timer = setTimeout(() => {
-          this.pending.delete(id);
-          reject(new Error(`${method} timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
+        entry.timer = setTimeout(() => abandon(new Error(`${method} timed out after ${timeoutMs}ms`)), timeoutMs);
       }
+      signal?.addEventListener("abort", onAbort, { once: true });
       this.pending.set(id, entry);
       try {
         this.send({ jsonrpc: "2.0", id, method, params });
       } catch (err) {
         this.pending.delete(id);
-        if (entry.timer) clearTimeout(entry.timer);
-        reject(err instanceof Error ? err : new Error(String(err)));
+        entry.reject(err instanceof Error ? err : new Error(String(err)));
       }
     });
   }
@@ -336,8 +418,8 @@ export class MCPStdioClient {
     return Array.isArray(res?.tools) ? (res.tools as ToolDescriptor[]) : [];
   }
 
-  async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
-    return this.request("tools/call", { name, arguments: args ?? {} }, CALL_TIMEOUT_MS);
+  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+    return this.request("tools/call", { name, arguments: args ?? {} }, this.callTimeoutMs, signal);
   }
 
   stop(): void {

@@ -95,11 +95,11 @@ export function registerOneTool(pi: ExtensionAPI, desc: ToolDescriptor): void {
     label: name,
     description: piAliasedDescription(name, piAliasName(name), (desc.description || name).trim()),
     parameters,
-    async execute(_id, params, _signal, _onUpdate, ctx) {
+    async execute(_id, params, signal, _onUpdate, ctx) {
       const client = getClient();
       if (!client) throw new Error(`gortex ${name}: MCP bridge is not connected`);
       const args = params ?? {};
-      const callTool = () => client.callTool(name, args);
+      const callTool = () => client.callTool(name, args, signal);
       let result: unknown;
       let diffs: FileDiff[] = [];
       try {
