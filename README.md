@@ -13,15 +13,16 @@ need instead of reading whole files around it, which is where the token
 savings come from. It is a single static binary with no dependency chain,
 and it covers 257 languages through tree-sitter.
 
-This extension connects the two. On Pi 0.99+ it hands `gortex mcp` to Pi's
-built-in MCP; on an older Pi, or with `native_mcp` off, it runs its own MCP
-client. Read discipline goes through `gortex hook` on both.
+This extension connects the two. It hands `gortex mcp` to Pi's built-in MCP,
+or runs its own MCP client with `native_mcp` off. Read discipline goes through
+`gortex hook` on both.
 
 ## What it does
 
 - **Registers Gortex's graph tools as native Pi tools**, through Pi's
-  built-in MCP or over the extension's own `gortex mcp` child per session. The deferred catalogue is reached through the
-  daemon's own `tools_search`, and promoted tools appear in Pi's registry.
+  built-in MCP or over the extension's own `gortex mcp` child per session. The
+  deferred catalogue is reached through the daemon's own `tools_search`, and
+  promoted tools appear in Pi's registry.
 - **Applies read discipline.** Pi's tool calls are forwarded to
   `gortex hook --agent=pi`, which answers block / soft guidance / nothing
   according to the posture you configured. Gortex owns that logic, so the
@@ -67,8 +68,8 @@ environment -> `<session cwd>/.pi/gortex.json` -> `<agent dir>/extensions/gortex
 | `bin`          | `GORTEX_BIN`       | `gortex` on `PATH` | The gortex binary. Read from the global sidecar only; a project file cannot set it. `~` expands, and a relative path resolves against the sidecar's directory (the launch directory for `GORTEX_BIN`). |
 | `hook_mode`    | `GORTEX_HOOK_MODE` | `deny`             | Posture: `deny`, `enrich`, `consult-unlock`, `nudge` (`adaptive-nudge` is an alias). |
 | `enforce`      | `GORTEX_ENFORCE`   | `true`             | `false` keeps the graph tools and the briefing, and wires no enforcement. |
-| `tools_preset` | `GORTEX_TOOLS`     | daemon's default   | Eager MCP surface: a Gortex preset (`core`, `full`, `agent`, `edit`, `nav`, `readonly`, `localization`) or a spec with commas or `+`/`-` deltas. A single unrecognised name is ignored. |
-| `native_mcp`   | `GORTEX_NATIVE_MCP` | `true`            | On Pi 0.99+, register `gortex mcp` with Pi's built-in MCP. `false` keeps the extension's own client. |
+| `tools_preset` | `GORTEX_TOOLS`     | daemon's default   | Eager MCP surface: a Gortex preset (`core`, `full`, `agent`, `edit`, `nav`, `readonly`, `localization`), optionally followed by comma-separated tool names and `+tool`/`-tool` changes, e.g. `nav,+edit_file`. A value that does not open with a preset is ignored. |
+| `native_mcp`   | `GORTEX_NATIVE_MCP` | `true`            | Register `gortex mcp` with Pi's built-in MCP. `false` keeps the extension's own client. |
 
 ```json
 {

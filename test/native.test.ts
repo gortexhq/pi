@@ -14,7 +14,7 @@ import type { Factory } from "./support/subject.ts";
 import { createHarness } from "./support/runner.ts";
 import type { ContextMessage, Harness } from "./support/runner.ts";
 import { control, mockDeps } from "./support/child-process-mock.ts";
-import { CONFIG, NATIVE_CONFIG, ORIENTATION, TOOLS, options } from "./support/fixtures.ts";
+import { CONFIG, NATIVE_CONFIG, ORIENTATION, TOOLS, options, withMcpConnector } from "./support/fixtures.ts";
 import path from "node:path";
 
 import { resolveConfig } from "../src/config.ts";
@@ -46,14 +46,6 @@ function withRegisterMcpServer(gortex: Factory, replacement: unknown): Factory {
       get: (target, key) => (key === "registerMcpServer" ? replacement : Reflect.get(target, key)),
     });
     gortex(patched, opts);
-  };
-}
-
-/** Stands in for the extension Pi uses to connect MCP servers. */
-function withMcpConnector(gortex: Factory): Factory {
-  return (pi, opts) => {
-    pi.registerCommand("mcp", { description: "Manage MCP servers", handler: async () => {} });
-    gortex(pi, opts);
   };
 }
 

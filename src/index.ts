@@ -147,8 +147,8 @@ function briefingInContext(ctx: ExtensionContext | undefined): boolean {
 export interface GortexExtensionOptions {
   /** Fixed configuration; resolveConfig() runs per session when this is absent. */
   config?: GortexConfig;
-  /** resolveConfig() seams other than `cwd`, which comes from the session. */
-  resolve?: Omit<ResolveConfigOptions, "cwd">;
+  /** resolveConfig() seams; `cwd` stands in for the process cwd until a session supplies one. */
+  resolve?: ResolveConfigOptions;
   /** Process seam for spawn/execFileSync. */
   deps?: ProcessDeps;
   /** Readiness cap override. */
@@ -162,10 +162,11 @@ export interface GortexExtensionOptions {
 }
 
 export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensionOptions = {}): void {
-  // The factory has no session cwd, so this first resolution reads the process
-  // cwd; session_start re-resolves against ctx.cwd, the directory a resumed
-  // session actually runs in.
-  const configFor = (cwd?: string): GortexConfig => options.config ?? resolveConfig({ ...options.resolve, cwd });
+  // Resolved again on every session_start from ctx.cwd, the directory the
+  // session runs in. The factory has no session, so this first resolution only
+  // serves a turn that outruns session_start.
+  const configFor = (cwd?: string): GortexConfig =>
+    options.config ?? resolveConfig({ ...options.resolve, cwd: cwd ?? options.resolve?.cwd });
   let config = configFor();
   const deps = options.deps ?? nodeProcessDeps;
   const readyWaitMs = options.readyWaitMs ?? READY_WAIT_MS;
@@ -175,13 +176,13 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
   // (which starts the daemon itself), registers the tools and renders them.
   // A binary that does not resolve, or a registration Pi refuses, falls back to
   // the extension's own client, which reports its failure to the model.
-  // Registered here when the factory's config allows, since Pi reads servers
-  // registered while extensions load on session_start.
+  // Registered on session_start only, once the session's config is known: Pi
+  // reads a registration made before its own session_start handler, and
+  // connects one made after it.
   let nativeRefusal = "";
   let native = false;
-  let registered = config;
-  // `connector` is false when session_start found nothing to connect the server.
-  function registerNative(connector = true): void {
+  let registered: GortexConfig | null = null;
+  function registerNative(connector: boolean): void {
     if (native) unregisterNativeServer(pi);
     native = false;
     registered = config;
@@ -190,12 +191,11 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
     nativeRefusal = registerNativeServer(pi, config);
     native = nativeRefusal === "";
   }
-  registerNative();
 
-  // Whether the session's config asks for a different server than the one registered.
+  // Re-registering an unchanged server would make Pi reconnect it.
   const channelChanged = (): boolean =>
+    registered === null ||
     registered.nativeMcp !== config.nativeMcp ||
-    registered.bin !== config.bin ||
     registered.toolsPreset !== config.toolsPreset;
 
   // Latched for the whole session once the first turn has run the
@@ -297,6 +297,7 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
     const c = new MCPStdioClient({
       bin: config.bin,
       toolsPreset: config.toolsPreset,
+      cwd: ctx?.cwd,
       deps,
       callTimeoutMs: options.callTimeoutMs,
       maxFrameBytes: options.maxFrameBytes,

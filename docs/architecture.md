@@ -196,15 +196,17 @@ serve both the npm package and a directory install.
 
 Resolution runs on every `session_start`, against the session's own directory.
 A resumed session runs where it was created, which need not be where Pi was
-launched. The factory has no session directory, so the native registration it
-makes reads the launch directory, and `session_start` registers the server
-again when the session's binary, preset or channel differ.
+launched. So the native server is registered on `session_start` rather than
+when Pi loads the extension, and again only when the session's preset or
+channel differ, since Pi reconnects a re-registered server. Pi reads a
+registration made before its own `session_start` handler and connects one made
+after it. The extension's own `gortex mcp` is spawned in the session's
+directory, which is what the proxy scopes the graph to.
 
-A tool preset reaches `gortex mcp` only when Gortex knows its name, or when it
-is a spec with commas or `+`/`-` deltas. Gortex reads a lone unknown name as a
-one-tool allow-list, so a typo would strand the session; it falls through to
-the next layer instead. The resolved value always overrides an inherited
-`GORTEX_TOOLS`.
+A tool preset reaches `gortex mcp` only when it opens with a preset Gortex
+knows. Gortex reads anything else as a bare allow-list, so a typo would strand
+the session; it falls through to the next layer instead. The resolved value
+always overrides an inherited `GORTEX_TOOLS`.
 
 The project file sits in whatever repository the session runs in, so it cannot
 set `bin`. Otherwise a cloned repository could choose the executable the

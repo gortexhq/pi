@@ -20,28 +20,24 @@ import type { Factory } from "./support/subject.ts";
 import { createHarness } from "./support/runner.ts";
 import type { Harness } from "./support/runner.ts";
 import { control } from "./support/child-process-mock.ts";
-import { ORIENTATION, TOOLS, options } from "./support/fixtures.ts";
+import { ORIENTATION, TOOLS, options, withMcpConnector } from "./support/fixtures.ts";
 
-const AGENT_DIR = mkdtempSync(join(tmpdir(), "pi-gortex-session-config-"));
-after(() => rmSync(AGENT_DIR, { recursive: true, force: true }));
+const ROOT = mkdtempSync(join(tmpdir(), "pi-gortex-session-config-"));
+after(() => rmSync(ROOT, { recursive: true, force: true }));
+const AGENT_DIR = join(ROOT, "agent");
+/** Stands in for the directory Pi was launched from. */
+const LAUNCH_DIR = join(ROOT, "launch");
+mkdirSync(AGENT_DIR);
+mkdirSync(LAUNCH_DIR);
 
 /** Resolution from the real files, under an environment the suite controls. */
 function resolving(env: Record<string, string>): GortexExtensionOptions {
-  return options({ config: undefined, resolve: { env, agentDir: AGENT_DIR }, nativeReadyWaitMs: 50 });
+  return options({ config: undefined, resolve: { env, agentDir: AGENT_DIR, cwd: LAUNCH_DIR }, nativeReadyWaitMs: 50 });
 }
 
 function writeSidecar(cwd: string, sidecar: Record<string, unknown>): void {
   mkdirSync(join(cwd, ".pi"), { recursive: true });
   writeFileSync(join(cwd, ".pi", "gortex.json"), JSON.stringify(sidecar));
-}
-
-/** Stands in for the extension Pi uses to connect MCP servers, which also follows later registrations. */
-function withMcpConnector(gortex: Factory): Factory {
-  return (pi, opts) => {
-    pi.registerCommand("mcp", { description: "Manage MCP servers", handler: async () => {} });
-    pi.on("mcp_servers_change", () => {});
-    gortex(pi, opts);
-  };
 }
 
 /** The env of the one server the extension registered, if any. */
@@ -57,11 +53,15 @@ describe("a session whose directory is not the launch directory", () => {
   before(async () => {
     control.reset({ tools: TOOLS, hookDecision: { orientation: ORIENTATION } });
     harness = await createHarness(await loadFactory(0), resolving(OWN_CLIENT));
-    assert.notEqual(harness.cwd, process.cwd(), "the suite needs the two directories to differ");
     writeSidecar(harness.cwd, { hook_mode: "enrich" });
     await harness.sessionStart("resume");
     await harness.turn();
     await harness.toolCall("read", { path: "src/a.ts" });
+  });
+
+  it("spawns the extension's own `gortex mcp` there", () => {
+    const mcp = control.spawns.find((spawn) => spawn.args[0] === "mcp");
+    assert.equal(mcp?.opts?.cwd, harness.cwd);
   });
 
   it("runs the hook under that directory's posture", () => {
@@ -73,8 +73,22 @@ describe("a session whose directory is not the launch directory", () => {
   });
 });
 
-describe("a session sidecar that turns enforcement off", () => {
-  it("leaves tool calls unchecked", async () => {
+describe("a session sidecar that sets enforcement", () => {
+  after(() => rmSync(join(LAUNCH_DIR, ".pi"), { recursive: true, force: true }));
+
+  it("checks tool calls when the launch directory turned it off", async () => {
+    control.reset({ tools: TOOLS });
+    writeSidecar(LAUNCH_DIR, { enforce: false });
+    const harness = await createHarness(await loadFactory(0), resolving(OWN_CLIENT));
+    writeSidecar(harness.cwd, { enforce: true });
+    await harness.sessionStart();
+    const before = control.hookCalls.length;
+    await harness.toolCall("read", { path: "src/a.ts" });
+    assert.equal(control.hookCalls.length, before + 1);
+    assert.deepEqual(harness.errors, []);
+  });
+
+  it("leaves tool calls unchecked when it turns it off", async () => {
     control.reset({ tools: TOOLS });
     const harness = await createHarness(await loadFactory(0), resolving(OWN_CLIENT));
     writeSidecar(harness.cwd, { enforce: false });
@@ -86,13 +100,15 @@ describe("a session sidecar that turns enforcement off", () => {
   });
 });
 
-describe("a session sidecar that changes the native server", () => {
+describe("the native server", () => {
   const NATIVE = { GORTEX_BIN: process.execPath };
 
-  it("re-registers the server with that directory's preset", async () => {
+  it("is registered on session_start with the session directory's preset", async () => {
     control.reset({ tools: TOOLS });
+    writeSidecar(LAUNCH_DIR, { tools_preset: "edit" });
     const harness = await createHarness(withMcpConnector(await loadFactory(0)), resolving(NATIVE));
-    assert.deepEqual(serverEnv(harness), { GORTEX_TOOLS: "", GORTEX_TOOLS_MODE: "" });
+    rmSync(join(LAUNCH_DIR, ".pi"), { recursive: true, force: true });
+    assert.deepEqual(harness.mcpServers(), [], "nothing may be registered before the session's config is known");
     writeSidecar(harness.cwd, { tools_preset: "nav" });
     await harness.sessionStart("resume");
     assert.equal(harness.mcpServers().length, 1);
@@ -101,15 +117,45 @@ describe("a session sidecar that changes the native server", () => {
     assert.deepEqual(harness.errors, []);
   });
 
-  it("withdraws it for the extension's own client when the sidecar opts out", async () => {
+  it("is left alone by a later session with the same config, so Pi does not reconnect it", async () => {
+    control.reset({ tools: TOOLS });
+    let registrations = 0;
+    const counting: Factory = (pi, opts) => {
+      const register = pi.registerMcpServer.bind(pi);
+      pi.registerMcpServer = (name, config) => {
+        registrations += 1;
+        register(name, config);
+      };
+      return withMcpConnector(gortex)(pi, opts);
+    };
+    const gortex = await loadFactory(0);
+    const harness = await createHarness(counting, resolving(NATIVE));
+    await harness.sessionStart();
+    await harness.sessionStart("new");
+    assert.equal(registrations, 1);
+    assert.equal(harness.mcpServers().length, 1);
+    assert.deepEqual(harness.errors, []);
+  });
+
+  it("is withdrawn for the extension's own client when a later session opts out", async () => {
     control.reset({ tools: TOOLS });
     const harness = await createHarness(withMcpConnector(await loadFactory(0)), resolving(NATIVE));
+    await harness.sessionStart();
     assert.equal(harness.mcpServers().length, 1);
     writeSidecar(harness.cwd, { native_mcp: false });
-    await harness.sessionStart("resume");
+    await harness.sessionStart("new");
     assert.deepEqual(harness.mcpServers(), []);
     assert.ok(control.spawns.some((s) => s.args[0] === "mcp"), "the own client never spawned");
     assert.ok(!harness.tools().some((name) => name.startsWith(MCP_TOOL_PREFIX)));
+    assert.deepEqual(harness.errors, []);
+  });
+
+  it("is never registered when nothing connects MCP servers", async () => {
+    control.reset({ tools: TOOLS });
+    const harness = await createHarness(await loadFactory(0), resolving(NATIVE));
+    await harness.sessionStart();
+    assert.deepEqual(harness.mcpServers(), []);
+    assert.ok(control.spawns.some((s) => s.args[0] === "mcp"), "the own client never spawned");
     assert.deepEqual(harness.errors, []);
   });
 });

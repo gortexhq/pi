@@ -64,6 +64,8 @@ export function presetEnv(
 export interface MCPStdioClientOptions {
   bin: string;
   toolsPreset: string;
+  /** The session's directory, which `gortex mcp` scopes the graph to. Default: the process cwd. */
+  cwd?: string;
   deps: ProcessDeps;
   env?: Record<string, string | undefined>;
   callTimeoutMs?: number;
@@ -150,6 +152,7 @@ export class MCPStdioClient {
 
   private readonly bin: string;
   private readonly toolsPreset: string;
+  private readonly cwd: string | undefined;
   private readonly deps: ProcessDeps;
   private readonly env: Record<string, string | undefined>;
   private readonly callTimeoutMs: number;
@@ -166,6 +169,7 @@ export class MCPStdioClient {
   constructor(options: MCPStdioClientOptions) {
     this.bin = options.bin;
     this.toolsPreset = options.toolsPreset;
+    this.cwd = options.cwd;
     this.deps = options.deps;
     this.env = options.env ?? process.env;
     this.callTimeoutMs = options.callTimeoutMs ?? CALL_TIMEOUT_MS;
@@ -179,6 +183,7 @@ export class MCPStdioClient {
   private spawnChild(): void {
     const child = this.deps.spawn(this.bin, ["mcp"], {
       stdio: ["pipe", "pipe", "pipe"],
+      cwd: this.cwd,
       env: this.childEnv(),
       windowsHide: true,
     });

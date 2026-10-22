@@ -253,12 +253,20 @@ describe("tool presets", () => {
   it("normalises case and whitespace the way Gortex does", () => {
     assert.equal(toolsSpec(" Core "), "core");
     assert.equal(toolsSpec("Read-Only"), "read-only");
+    assert.equal(toolsSpec("facade-v1"), "facade-v1");
   });
 
-  it("passes a deliberate spec through", () => {
-    assert.equal(toolsSpec("search_symbols,edit_file"), "search_symbols,edit_file");
+  it("passes a spec that opens with a preset", () => {
     assert.equal(toolsSpec("nav,+edit_file"), "nav,+edit_file");
-    assert.equal(toolsSpec("-analyze"), "-analyze");
+    assert.equal(toolsSpec(" Core , -analyze ,find_files"), "core,-analyze,find_files");
+  });
+
+  it("drops a spec Gortex would read as a bare allow-list", () => {
+    assert.equal(toolsSpec("+edit_file"), undefined);
+    assert.equal(toolsSpec("-analyze"), undefined);
+    assert.equal(toolsSpec("edti,+edit_file"), undefined);
+    assert.equal(toolsSpec("search_symbols,edit_file"), undefined);
+    assert.equal(toolsSpec(","), undefined);
   });
 
   it("ignores a non-string sidecar value", () => {

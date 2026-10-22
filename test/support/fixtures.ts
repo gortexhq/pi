@@ -5,6 +5,7 @@ import type { GortexConfig } from "../../src/config.ts";
 import type { GortexExtensionOptions } from "../../src/index.ts";
 import { control, mockDeps } from "./child-process-mock.ts";
 import type { Harness } from "./runner.ts";
+import type { Factory } from "./subject.ts";
 
 export const ORIENTATION = "GORTEX-ORIENTATION: prefer graph tools over native reads.";
 
@@ -25,6 +26,18 @@ export const CONFIG: GortexConfig = {
 
 // The native path only registers a binary that resolves; Pi never spawns it here.
 export const NATIVE_CONFIG: GortexConfig = { ...CONFIG, bin: process.execPath, nativeMcp: true };
+
+/**
+ * Stands in for the extension Pi uses to connect MCP servers. Pi takes an
+ * `mcp_servers_change` handler as the sign that one is loaded.
+ */
+export function withMcpConnector(gortex: Factory): Factory {
+  return (pi, opts) => {
+    pi.registerCommand("mcp", { description: "Manage MCP servers", handler: async () => {} });
+    pi.on("mcp_servers_change", () => {});
+    gortex(pi, opts);
+  };
+}
 
 export function options(overrides: Partial<GortexExtensionOptions> = {}): GortexExtensionOptions {
   return { config: CONFIG, deps: mockDeps, ...overrides };

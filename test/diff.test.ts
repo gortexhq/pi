@@ -24,7 +24,7 @@ import { loadFactory } from "./support/subject.ts";
 import { createHarness } from "./support/runner.ts";
 import type { Harness } from "./support/runner.ts";
 import { control, resetInitializeAttempts } from "./support/child-process-mock.ts";
-import { NATIVE_CONFIG, ORIENTATION, options } from "./support/fixtures.ts";
+import { NATIVE_CONFIG, ORIENTATION, options, withMcpConnector } from "./support/fixtures.ts";
 
 const schema = { type: "object", properties: {} };
 const TOOLS = [
@@ -251,14 +251,6 @@ describe("a Gortex call that writes files", () => {
     assert.match(view(true), /status: applied/);
   });
 });
-
-/** Stands in for the extension Pi uses to connect MCP servers. */
-function withMcpConnector(gortex: Factory): Factory {
-  return (pi, opts) => {
-    pi.registerCommand("mcp", { description: "Manage MCP servers", handler: async () => {} });
-    gortex(pi, opts);
-  };
-}
 
 describe("a Gortex call that writes files on Pi's built-in MCP", () => {
   const EDIT = `${MCP_TOOL_PREFIX}edit`;

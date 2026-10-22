@@ -32,6 +32,7 @@ export interface BridgeChild {
 export interface SpawnOpts {
   stdio?: "ignore" | ("pipe" | "ignore")[];
   detached?: boolean;
+  cwd?: string;
   env?: Record<string, string | undefined>;
   windowsHide?: boolean;
 }

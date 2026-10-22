@@ -86,7 +86,7 @@ const KNOWN_PRESETS = new Set([
   "full", "all",
   "core", "default", "classic",
   "agent", "coding-agent",
-  "agent-v2", "compact", "facade",
+  "facade-v1", "agent-v2", "compact", "facade",
   "readonly", "read-only", "read_only",
   "edit", "editor", "edit-harness",
   "nav", "navigate", "explore",
@@ -94,17 +94,17 @@ const KNOWN_PRESETS = new Set([
 ]);
 
 /**
- * A tools_preset / GORTEX_TOOLS value Gortex should see, or undefined. A lone
- * unrecognised word (a typo, a stale value) would parse server side as a
- * one-tool allow-list and strand the session, so it is dropped. A spec with
- * commas or `+`/`-` deltas is deliberate and passes through.
+ * A tools_preset / GORTEX_TOOLS value Gortex should see, or undefined. Gortex
+ * reads a spec that does not open with a preset as a bare allow-list, so a
+ * typo (or `+tool` alone) would strip the session down to a tool or two. Only
+ * a spec opening with a known preset passes, optionally followed by
+ * comma-separated tool names and `+tool`/`-tool` changes.
  */
 export function toolsSpec(value: string | undefined): string | undefined {
-  const spec = (value ?? "").trim();
-  if (spec === "") return undefined;
-  if (spec.includes(",") || /^[+-]/.test(spec)) return spec;
-  const preset = spec.toLowerCase();
-  return KNOWN_PRESETS.has(preset) ? preset : undefined;
+  const tokens = (value ?? "").split(",").map((token) => token.trim()).filter(Boolean);
+  const preset = tokens[0]?.toLowerCase();
+  if (preset === undefined || !KNOWN_PRESETS.has(preset)) return undefined;
+  return [preset, ...tokens.slice(1)].join(",");
 }
 
 /** Sidecar paths, nearest first. A project file wins over the global one. */
