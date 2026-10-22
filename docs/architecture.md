@@ -115,7 +115,8 @@ keys. That translation lives on this side of the bridge, so the Go side keeps
 one vocabulary for every agent it serves.
 
 A call to a Gortex tool is flagged as a graph call and sent under the daemon's
-own tool name, which is what the postures key off. It skips the translation, so
+own tool name, which is what the postures key off. On Pi's built-in MCP that
+means the `mcp__gortex__` prefix is stripped. It skips the translation, so
 Gortex's `read` never passes for Pi's. On Pi's built-in MCP the same hook also
 sees each tool a codemode script calls.
 
@@ -193,6 +194,20 @@ project file and a global one to defaults. See the table in the
 [README](../README.md#configure). Runtime resolution is what lets one artifact
 serve both the npm package and a directory install.
 
-The project file sits in whatever repository Pi was opened in, so it cannot
+Resolution runs on every `session_start`, against the session's own directory.
+A resumed session runs where it was created, which need not be where Pi was
+launched. So the native server is registered on `session_start` rather than
+when Pi loads the extension, and again only when the session's preset or
+channel differ, since Pi reconnects a re-registered server. Pi reads a
+registration made before its own `session_start` handler and connects one made
+after it. The extension's own `gortex mcp` is spawned in the session's
+directory, which is what the proxy scopes the graph to.
+
+A tool preset reaches `gortex mcp` only when it opens with a preset Gortex
+knows. Gortex reads anything else as a bare allow-list, so a typo would strand
+the session; it falls through to the next layer instead. The resolved value
+always overrides an inherited `GORTEX_TOOLS`.
+
+The project file sits in whatever repository the session runs in, so it cannot
 set `bin`. Otherwise a cloned repository could choose the executable the
 extension spawns. The binary comes from `GORTEX_BIN`, the global file or `PATH`.

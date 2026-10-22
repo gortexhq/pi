@@ -13,13 +13,16 @@ need instead of reading whole files around it, which is where the token
 savings come from. It is a single static binary with no dependency chain,
 and it covers 257 languages through tree-sitter.
 
-Pi has no MCP support by design, so this extension is the bridge.
+This extension connects the two. It hands `gortex mcp` to Pi's built-in MCP,
+or runs its own MCP client with `native_mcp` off. Read discipline goes through
+`gortex hook` on both.
 
 ## What it does
 
-- **Registers Gortex's graph tools as native Pi tools**, over a persistent
-  `gortex mcp` child per session. The deferred catalogue is reached through the
-  daemon's own `tools_search`, and promoted tools appear in Pi's registry.
+- **Registers Gortex's graph tools as native Pi tools**, through Pi's
+  built-in MCP or over the extension's own `gortex mcp` child per session. The
+  deferred catalogue is reached through the daemon's own `tools_search`, and
+  promoted tools appear in Pi's registry.
 - **Applies read discipline.** Pi's tool calls are forwarded to
   `gortex hook --agent=pi`, which answers block / soft guidance / nothing
   according to the posture you configured. Gortex owns that logic, so the
@@ -31,7 +34,7 @@ See [docs/architecture.md](docs/architecture.md) for how it works.
 
 ## Requirements
 
-- **Node 24+**, **Pi 0.85+**
+- **Node 24+**, **Pi 1.0+**
 - **The `gortex` binary** on `PATH`, **v0.61.2 or newer**. See
   [Gortex installation](https://github.com/zzet/gortex/blob/main/docs/installation.md).
   The extension starts the shared daemon itself and never blocks Pi's startup
@@ -57,16 +60,16 @@ the absolute path, or a single run with `pi -e /path/to/pi-gortex`.
 ## Configure
 
 Zero configuration required. Every value resolves at runtime, first hit wins:
-environment -> `<cwd>/.pi/gortex.json` -> `<agent dir>/extensions/gortex.json`
+environment -> `<session cwd>/.pi/gortex.json` -> `<agent dir>/extensions/gortex.json`
 (agent dir is `$PI_CODING_AGENT_DIR`, else `~/.pi/agent`) -> defaults.
 
 | Sidecar key    | Environment        | Default            | Meaning |
 |----------------|--------------------|--------------------|---------|
-| `bin`          | `GORTEX_BIN`       | `gortex` on `PATH` | Binary used for `daemon start`, `mcp` and `hook`. Read from the global sidecar only; a project file cannot set it. |
-| `hook_mode`    | `GORTEX_HOOK_MODE` | `deny`             | Posture: `deny`, `enrich`, `consult-unlock`, `nudge`. |
+| `bin`          | `GORTEX_BIN`       | `gortex` on `PATH` | The gortex binary. Read from the global sidecar only; a project file cannot set it. `~` expands, and a relative path resolves against the sidecar's directory (the launch directory for `GORTEX_BIN`). |
+| `hook_mode`    | `GORTEX_HOOK_MODE` | `deny`             | Posture: `deny`, `enrich`, `consult-unlock`, `nudge` (`adaptive-nudge` is an alias). |
 | `enforce`      | `GORTEX_ENFORCE`   | `true`             | `false` keeps the graph tools and the briefing, and wires no enforcement. |
-| `tools_preset` | `GORTEX_TOOLS`     | `core`             | Eager MCP surface. `core`/`full` use the daemon's default; `edit`/`nav`/`readonly` narrow it. |
-| `native_mcp`   | `GORTEX_NATIVE_MCP` | `true`            | On Pi 0.99+, register `gortex mcp` with Pi's built-in MCP. `false` keeps the extension's own client. |
+| `tools_preset` | `GORTEX_TOOLS`     | daemon's default   | Eager MCP surface: a Gortex preset (`core`, `full`, `agent`, `edit`, `nav`, `readonly`, `localization`), optionally followed by comma-separated tool names and `+tool`/`-tool` changes, e.g. `nav,+edit_file`. A value that does not open with a preset is ignored. |
+| `native_mcp`   | `GORTEX_NATIVE_MCP` | `true`            | Register `gortex mcp` with Pi's built-in MCP. `false` keeps the extension's own client. |
 
 ```json
 {
@@ -76,8 +79,8 @@ environment -> `<cwd>/.pi/gortex.json` -> `<agent dir>/extensions/gortex.json`
 }
 ```
 
-The extension reads its configuration when Pi loads it, so a change takes
-effect after `/reload`.
+The extension reads its configuration at every session start, from the
+directory the session runs in, so a change takes effect on `/reload` or `/new`.
 
 **Pi's own `mcp.json` wins.** With `native_mcp` on, the extension registers a
 server named `gortex`. A `gortex` entry in `~/.pi/agent/mcp.json` or

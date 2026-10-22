@@ -8,9 +8,18 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { homedir } from "node:os";
 import path from "node:path";
 
-import { DEFAULT_BIN, defaultAgentDir, normalizeMode, resolveConfig, sidecarPaths } from "../src/config.ts";
+import {
+  DEFAULT_BIN,
+  defaultAgentDir,
+  expandHome,
+  normalizeMode,
+  resolveConfig,
+  sidecarPaths,
+  toolsSpec,
+} from "../src/config.ts";
 
 const CWD = "/repo";
 const AGENT_DIR = "/home/user/.pi/agent";
@@ -50,7 +59,7 @@ describe("with nothing configured", () => {
   });
 
   it("asks for no preset, so the daemon's own surface applies", () => {
-    assert.equal(config.toolsPreset, "core");
+    assert.equal(config.toolsPreset, "");
   });
 });
 
@@ -169,5 +178,98 @@ describe("sidecar locations", () => {
 
   it("honours Pi's own agent-dir override", () => {
     assert.equal(defaultAgentDir({ PI_CODING_AGENT_DIR: "/custom/agent" }), "/custom/agent");
+  });
+
+  it("expands every home form in the agent-dir override", () => {
+    assert.equal(defaultAgentDir({ PI_CODING_AGENT_DIR: "~" }), homedir());
+    assert.equal(defaultAgentDir({ PI_CODING_AGENT_DIR: "~/agent" }), path.join(homedir(), "agent"));
+    assert.equal(defaultAgentDir({ PI_CODING_AGENT_DIR: "~\\agent" }), path.join(homedir(), "agent"));
+  });
+});
+
+describe("home expansion", () => {
+  it("expands ~, ~/ and ~\\ only", () => {
+    assert.equal(expandHome("~", "/h"), "/h");
+    assert.equal(expandHome("~/bin/gortex", "/h"), path.join("/h", "bin/gortex"));
+    assert.equal(expandHome("~\\bin\\gortex.exe", "/h"), path.join("/h", "bin\\gortex.exe"));
+    assert.equal(expandHome("~other/gortex", "/h"), "~other/gortex");
+    assert.equal(expandHome("/abs/~/gortex", "/h"), "/abs/~/gortex");
+  });
+});
+
+// Why: a relative or ~ `bin` resolved against wherever Pi was launched, so it
+// worked only from one directory, and `~` never resolved at all.
+describe("bin resolution", () => {
+  const bin = (env: Record<string, string | undefined>, map: Record<string, string> = {}) => resolve(env, map).bin;
+
+  it("anchors a relative global-sidecar bin at the sidecar's directory", () => {
+    const config = resolve({}, { [GLOBAL_SIDECAR]: JSON.stringify({ bin: "./gortex-shim" }) });
+    const expected = path.resolve(AGENT_DIR, "extensions", "gortex-shim");
+    assert.equal(config.bin, expected);
+    assert.equal(config.hookArgv[0], expected);
+    assert.equal(bin({}, { [GLOBAL_SIDECAR]: JSON.stringify({ bin: "../bin/gortex" }) }), path.resolve(AGENT_DIR, "bin", "gortex"));
+  });
+
+  it("expands ~ in the global sidecar and the environment", () => {
+    assert.equal(bin({}, { [GLOBAL_SIDECAR]: JSON.stringify({ bin: "~/.local/bin/gortex" }) }), path.join(homedir(), ".local/bin/gortex"));
+    assert.equal(bin({ GORTEX_BIN: "~/.local/bin/gortex" }), path.join(homedir(), ".local/bin/gortex"));
+    assert.equal(bin({ GORTEX_BIN: "~\\gortex.exe" }), path.join(homedir(), "gortex.exe"));
+  });
+
+  it("anchors a relative GORTEX_BIN at the process cwd", () => {
+    assert.equal(bin({ GORTEX_BIN: "./tools/gortex" }), path.resolve("tools/gortex"));
+  });
+
+  it("leaves a bare name and an absolute path alone", () => {
+    assert.equal(bin({}, { [GLOBAL_SIDECAR]: JSON.stringify({ bin: "gortex-dev" }) }), "gortex-dev");
+    assert.equal(bin({ GORTEX_BIN: "/opt/gortex" }), "/opt/gortex");
+  });
+});
+
+// Why: GORTEX_TOOLS skipped the check the sidecar value got, so a typo reached
+// Gortex as a one-tool allow-list, and `core`/`full` meant different surfaces
+// depending on which layer named them.
+describe("tool presets", () => {
+  it("drops a lone unrecognised word from either layer", () => {
+    assert.equal(toolsSpec("edti"), undefined);
+    assert.equal(resolve({ GORTEX_TOOLS: "edti" }).toolsPreset, "");
+    assert.equal(resolve({}, { [PROJECT_SIDECAR]: JSON.stringify({ tools_preset: "Edti" }) }).toolsPreset, "");
+  });
+
+  it("lets a rejected environment value fall through to the sidecars", () => {
+    const config = resolve({ GORTEX_TOOLS: "edti" }, { [GLOBAL_SIDECAR]: JSON.stringify({ tools_preset: "nav" }) });
+    assert.equal(config.toolsPreset, "nav");
+  });
+
+  it("gives every preset the same meaning from either layer", () => {
+    for (const preset of ["core", "full", "edit", "nav", "readonly", "agent", "localization"]) {
+      const fromEnv = resolve({ GORTEX_TOOLS: preset }).toolsPreset;
+      const fromSidecar = resolve({}, { [PROJECT_SIDECAR]: JSON.stringify({ tools_preset: preset }) }).toolsPreset;
+      assert.equal(fromEnv, preset);
+      assert.equal(fromSidecar, preset);
+    }
+  });
+
+  it("normalises case and whitespace the way Gortex does", () => {
+    assert.equal(toolsSpec(" Core "), "core");
+    assert.equal(toolsSpec("Read-Only"), "read-only");
+    assert.equal(toolsSpec("facade-v1"), "facade-v1");
+  });
+
+  it("passes a spec that opens with a preset", () => {
+    assert.equal(toolsSpec("nav,+edit_file"), "nav,+edit_file");
+    assert.equal(toolsSpec(" Core , -analyze ,find_files"), "core,-analyze,find_files");
+  });
+
+  it("drops a spec Gortex would read as a bare allow-list", () => {
+    assert.equal(toolsSpec("+edit_file"), undefined);
+    assert.equal(toolsSpec("-analyze"), undefined);
+    assert.equal(toolsSpec("edti,+edit_file"), undefined);
+    assert.equal(toolsSpec("search_symbols,edit_file"), undefined);
+    assert.equal(toolsSpec(","), undefined);
+  });
+
+  it("ignores a non-string sidecar value", () => {
+    assert.equal(resolve({}, { [PROJECT_SIDECAR]: JSON.stringify({ tools_preset: 3 }) }).toolsPreset, "");
   });
 });

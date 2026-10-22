@@ -32,7 +32,9 @@ export interface BridgeChild {
 export interface SpawnOpts {
   stdio?: "ignore" | ("pipe" | "ignore")[];
   detached?: boolean;
+  cwd?: string;
   env?: Record<string, string | undefined>;
+  windowsHide?: boolean;
 }
 
 export interface ExecFileSyncOpts {
@@ -40,6 +42,7 @@ export interface ExecFileSyncOpts {
   encoding?: "utf8";
   maxBuffer?: number;
   timeout?: number;
+  windowsHide?: boolean;
 }
 
 export interface ProcessDeps {

@@ -13,10 +13,12 @@ import { loadFactory } from "./support/subject.ts";
 import type { Factory } from "./support/subject.ts";
 import { createHarness } from "./support/runner.ts";
 import type { ContextMessage, Harness } from "./support/runner.ts";
-import { control } from "./support/child-process-mock.ts";
-import { CONFIG, NATIVE_CONFIG, ORIENTATION, TOOLS, options } from "./support/fixtures.ts";
+import { control, mockDeps } from "./support/child-process-mock.ts";
+import { CONFIG, NATIVE_CONFIG, ORIENTATION, TOOLS, options, withMcpConnector } from "./support/fixtures.ts";
 import path from "node:path";
 
+import { resolveConfig } from "../src/config.ts";
+import { MCPStdioClient } from "../src/mcp-client.ts";
 import {
   MCP_TOOL_PREFIX,
   binaryResolves,
@@ -44,14 +46,6 @@ function withRegisterMcpServer(gortex: Factory, replacement: unknown): Factory {
       get: (target, key) => (key === "registerMcpServer" ? replacement : Reflect.get(target, key)),
     });
     gortex(patched, opts);
-  };
-}
-
-/** Stands in for the extension Pi uses to connect MCP servers. */
-function withMcpConnector(gortex: Factory): Factory {
-  return (pi, opts) => {
-    pi.registerCommand("mcp", { description: "Manage MCP servers", handler: async () => {} });
-    gortex(pi, opts);
   };
 }
 
@@ -308,18 +302,66 @@ describe("binary resolution", () => {
 });
 
 describe("the server config", () => {
-  it("forwards a narrowing preset to `gortex mcp`", () => {
+  const env = (config: ReturnType<typeof nativeServerConfig>) => (config as { env?: unknown }).env;
+
+  it("forwards a preset to `gortex mcp`", () => {
     const config = nativeServerConfig({ ...NATIVE_CONFIG, toolsPreset: "nav" }, {});
-    assert.deepEqual((config as { env?: unknown }).env, { GORTEX_TOOLS: "nav", GORTEX_TOOLS_MODE: "defer" });
+    assert.deepEqual(env(config), { GORTEX_TOOLS: "nav", GORTEX_TOOLS_MODE: "defer" });
   });
 
-  it("leaves the daemon's default surface alone", () => {
-    const config = nativeServerConfig(NATIVE_CONFIG, {});
-    assert.deepEqual((config as { env?: unknown }).env, {});
+  it("clears both variables for the daemon's default surface", () => {
+    const config = nativeServerConfig(NATIVE_CONFIG, { GORTEX_TOOLS: "edti", GORTEX_TOOLS_MODE: "defer" });
+    assert.deepEqual(env(config), { GORTEX_TOOLS: "", GORTEX_TOOLS_MODE: "" });
   });
 
-  it("does not override a GORTEX_TOOLS the user already exported", () => {
-    const config = nativeServerConfig({ ...NATIVE_CONFIG, toolsPreset: "nav" }, { GORTEX_TOOLS: "full" });
-    assert.deepEqual((config as { env?: unknown }).env, { GORTEX_TOOLS_MODE: "defer" });
+  it("keeps a GORTEX_TOOLS_MODE the user exported", () => {
+    const config = nativeServerConfig({ ...NATIVE_CONFIG, toolsPreset: "nav" }, { GORTEX_TOOLS_MODE: "hide" });
+    assert.deepEqual(env(config), { GORTEX_TOOLS: "nav", GORTEX_TOOLS_MODE: "hide" });
+  });
+});
+
+// Why: an exported GORTEX_TOOLS skipped validation and outranked the resolved
+// preset, so a typo stranded the session and `core`/`full` behaved differently
+// from env and sidecar. Both channels must hand `gortex mcp` the same variables.
+describe("preset parity across layers and channels", () => {
+  const AGENT_DIR = "/agent";
+  const SIDECAR = path.join(AGENT_DIR, "extensions", "gortex.json");
+
+  function childEnvs(env: Record<string, string>, sidecar: Record<string, unknown> | null) {
+    const config = resolveConfig({
+      env,
+      cwd: "/repo",
+      agentDir: AGENT_DIR,
+      readFile: (p) => {
+        if (sidecar && p === SIDECAR) return JSON.stringify(sidecar);
+        throw new Error("ENOENT");
+      },
+    });
+    const native = (nativeServerConfig(config, env) as { env: Record<string, string> }).env;
+    const merged = { ...env, ...native };
+    control.reset();
+    const client = new MCPStdioClient({ bin: config.bin, toolsPreset: config.toolsPreset, deps: mockDeps, env });
+    client.start().catch(() => {});
+    client.stop();
+    const own = control.spawns.at(-1)?.opts?.env ?? {};
+    return {
+      native: { GORTEX_TOOLS: merged.GORTEX_TOOLS, GORTEX_TOOLS_MODE: merged.GORTEX_TOOLS_MODE },
+      own: { GORTEX_TOOLS: own.GORTEX_TOOLS, GORTEX_TOOLS_MODE: own.GORTEX_TOOLS_MODE },
+    };
+  }
+
+  for (const preset of ["core", "full", "nav"]) {
+    it(`serves the same \`${preset}\` surface from env and sidecar`, () => {
+      const fromEnv = childEnvs({ GORTEX_TOOLS: preset }, null);
+      const fromSidecar = childEnvs({}, { tools_preset: preset });
+      const expected = { GORTEX_TOOLS: preset, GORTEX_TOOLS_MODE: "defer" };
+      assert.deepEqual(fromEnv, { native: expected, own: expected });
+      assert.deepEqual(fromSidecar, { native: expected, own: expected });
+    });
+  }
+
+  it("keeps a mistyped GORTEX_TOOLS and its mode away from the child", () => {
+    const empty = { GORTEX_TOOLS: "", GORTEX_TOOLS_MODE: "" };
+    assert.deepEqual(childEnvs({ GORTEX_TOOLS: "edti", GORTEX_TOOLS_MODE: "defer" }, null), { native: empty, own: empty });
   });
 });

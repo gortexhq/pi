@@ -95,8 +95,8 @@ says as much rather than implying coverage it does not have.
 
 ## Pinning
 
-The Pi devDependency is pinned tight on purpose. Pi is pre-1.0 and its runner's
-method surface has been renamed without a changelog entry before, so a tight pin
+The Pi devDependency is pinned tight on purpose. Pi's runner's method surface
+has been renamed without a changelog entry before, so a tight pin
 turns that into a red build rather than a silently skipped suite. The runtime
 peer dependency stays wide.
 

@@ -18,7 +18,7 @@ const SERVER_DESCRIPTION =
   "Gortex code graph of the indexed repositories: symbol search, source reads, usages, " +
   "call chains, change impact and graph-aware edits.";
 
-// Pi 0.87 declares none of the MCP members, so they are read structurally.
+// Read structurally, since a Pi before 0.99 has none of these members.
 type NativeMcpApi = Pick<ExtensionAPI, "registerMcpServer" | "unregisterMcpServer" | "getAllTools" | "getCommands">;
 
 export function supportsNativeMcp(pi: ExtensionAPI): boolean {

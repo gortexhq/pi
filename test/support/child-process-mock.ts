@@ -11,6 +11,7 @@ export interface HookCall {
   bin: string;
   args: string[];
   input: string | undefined;
+  opts: ExecFileSyncOpts | undefined;
 }
 
 export interface SpawnRecord {
@@ -231,7 +232,7 @@ export function spawn(bin: string, args: string[] = [], opts?: SpawnOpts): Bridg
 }
 
 export function execFileSync(bin: string, args: string[] = [], opts?: ExecFileSyncOpts): string {
-  control.hookCalls.push({ bin, args: [...args], input: opts?.input });
+  control.hookCalls.push({ bin, args: [...args], input: opts?.input, opts });
   return JSON.stringify(control.hookDecision);
 }
 

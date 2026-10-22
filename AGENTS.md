@@ -1,8 +1,8 @@
 # pi-gortex
 
-A Pi extension that bridges Gortex's MCP graph tools into Pi and forwards Pi's
-tool calls to `gortex hook` for read discipline. Pi has no MCP support, so this
-package is the adapter.
+A Pi extension that brings Gortex's MCP graph tools into Pi, through Pi's
+built-in MCP or its own client, and forwards Pi's tool calls to `gortex hook`
+for read discipline.
 
 ## Commands
 

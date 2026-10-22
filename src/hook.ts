@@ -26,6 +26,7 @@ const HOOK_EXEC_OPTS: ExecFileSyncOpts = {
   encoding: "utf8",
   maxBuffer: 16 * 1024 * 1024,
   timeout: 5_000,
+  windowsHide: true,
 };
 
 /**
@@ -55,9 +56,9 @@ export function callHook(argv: string[], deps: ProcessDeps, envelope: PiEnvelope
 // The Go classifier switches on Claude-Code tool names and canonical input
 // keys ("file_path"/"pattern"/"command"), so the translation lives here.
 //
-// NOTE: Pi is pre-1.0. The built-in tool names mapped here are pinned to Pi's
-// documented API (packages/coding-agent/docs/extensions.md); if an upgrade
-// renames one, adjust this small map; the Go wire contract stays unchanged.
+// The built-in tool names mapped here are pinned to Pi's documented API
+// (packages/coding-agent/docs/extensions.md); if an upgrade renames one, adjust
+// this small map; the Go wire contract stays unchanged.
 export const toolNameMap: Record<string, string> = {
   read: "Read",
   grep: "Grep",

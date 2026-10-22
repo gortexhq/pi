@@ -7,17 +7,17 @@
 
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 
 /** The sidecar file's on-disk shape. `gortex init` is its writer. */
 export interface SidecarConfig {
-  /** Absolute path to the gortex binary. Global sidecar only. Default: resolved from PATH. */
+  /** The gortex binary. Global sidecar only; relative to the sidecar's directory. Default: resolved from PATH. */
   bin?: string;
   /** Hook posture: deny | enrich | consult-unlock | nudge. */
   hook_mode?: string;
   /** false mirrors `gortex init --no-hooks`: orientation only, no enforcement. */
   enforce?: boolean;
-  /** Eager MCP tool preset: core | full | edit | nav | readonly. */
+  /** Eager MCP tool preset (core | full | agent | edit | nav | readonly | localization) or a tool spec. */
   tools_preset?: string;
   /** false keeps the extension's own MCP client on a Pi that has built-in MCP. */
   native_mcp?: boolean;
@@ -31,7 +31,7 @@ export interface GortexConfig {
   hookArgv: string[];
   /** Whether to wire read-discipline enforcement onto tool_call. */
   enforce: boolean;
-  /** Eager tool preset; the daemon's default applies when this is core/full. */
+  /** GORTEX_TOOLS for `gortex mcp`; empty leaves the daemon's default surface. */
   toolsPreset: string;
   /** Whether to hand the tool channel to Pi's built-in MCP when Pi has one. */
   nativeMcp: boolean;
@@ -47,7 +47,15 @@ export interface ResolveConfigOptions {
 }
 
 export const DEFAULT_BIN = "gortex";
-export const DEFAULT_TOOLS_PRESET = "core";
+/** No preset: `gortex mcp` serves the daemon's default surface. */
+export const DEFAULT_TOOLS_PRESET = "";
+
+/** Expands a leading `~`, `~/` or `~\` to the home directory. */
+export function expandHome(path: string, home: string = homedir()): string {
+  if (path === "~") return home;
+  if (path.startsWith("~/") || path.startsWith("~\\")) return join(home, path.slice(2));
+  return path;
+}
 
 /**
  * Pi's agent directory, resolved the way Pi itself resolves it
@@ -59,13 +67,44 @@ export const DEFAULT_TOOLS_PRESET = "core";
  */
 export function defaultAgentDir(env: Record<string, string | undefined> = process.env): string {
   const override = env.PI_CODING_AGENT_DIR;
-  if (override && override.trim() !== "") {
-    const path = override.trim();
-    if (path === "~") return homedir();
-    if (path.startsWith("~/")) return join(homedir(), path.slice(2));
-    return path;
-  }
+  if (override && override.trim() !== "") return expandHome(override.trim());
   return join(homedir(), ".pi", "agent");
+}
+
+/**
+ * A `bin` setting as spawn needs it: `~` expanded, a relative path anchored at
+ * `baseDir`, a bare name left for PATH lookup.
+ */
+export function resolveBin(bin: string, baseDir: string): string {
+  const expanded = expandHome(bin);
+  if (!/[\\/]/.test(expanded) || isAbsolute(expanded)) return expanded;
+  return resolve(baseDir, expanded);
+}
+
+// Preset names and aliases Gortex accepts (internal/mcp/tool_presets.go).
+const KNOWN_PRESETS = new Set([
+  "full", "all",
+  "core", "default", "classic",
+  "agent", "coding-agent",
+  "facade-v1", "agent-v2", "compact", "facade",
+  "readonly", "read-only", "read_only",
+  "edit", "editor", "edit-harness",
+  "nav", "navigate", "explore",
+  "localization", "locate", "find",
+]);
+
+/**
+ * A tools_preset / GORTEX_TOOLS value Gortex should see, or undefined. Gortex
+ * reads a spec that does not open with a preset as a bare allow-list, so a
+ * typo (or `+tool` alone) would strip the session down to a tool or two. Only
+ * a spec opening with a known preset passes, optionally followed by
+ * comma-separated tool names and `+tool`/`-tool` changes.
+ */
+export function toolsSpec(value: string | undefined): string | undefined {
+  const tokens = (value ?? "").split(",").map((token) => token.trim()).filter(Boolean);
+  const preset = tokens[0]?.toLowerCase();
+  if (preset === undefined || !KNOWN_PRESETS.has(preset)) return undefined;
+  return [preset, ...tokens.slice(1)].join(",");
 }
 
 /** Sidecar paths, nearest first. A project file wins over the global one. */
@@ -139,30 +178,41 @@ export function resolveConfig(opts: ResolveConfigOptions = {}): GortexConfig {
   const agentDir = opts.agentDir ?? defaultAgentDir(env);
   const readFile = opts.readFile ?? ((path: string) => readFileSync(path, "utf8"));
 
-  const [project, global] = sidecarPaths(cwd, agentDir).map((path) => readSidecar(path, readFile));
+  const [projectPath, globalPath] = sidecarPaths(cwd, agentDir) as [string, string];
+  const project = readSidecar(projectPath, readFile);
+  const global = readSidecar(globalPath, readFile);
 
   // A checked-out repository must never pick the executable, so the project
   // sidecar has no say in `bin`. `gortex` unqualified is resolved against PATH.
-  const bin = firstString(env.GORTEX_BIN, global?.bin) ?? DEFAULT_BIN;
+  const envBin = firstString(env.GORTEX_BIN);
+  const globalBin = firstString(global.bin);
+  const bin = envBin
+    ? resolveBin(envBin, process.cwd())
+    : globalBin
+      ? resolveBin(globalBin, dirname(globalPath))
+      : DEFAULT_BIN;
 
-  const mode = normalizeMode(firstString(env.GORTEX_HOOK_MODE, project?.hook_mode, global?.hook_mode));
+  const mode = normalizeMode(firstString(env.GORTEX_HOOK_MODE, project.hook_mode, global.hook_mode));
   const hookArgv = [bin, "hook", "--agent=pi"];
   // "deny" is the hook's own default, so it rides as an absent flag.
   if (mode !== "deny") hookArgv.push(`--mode=${mode}`);
 
   const enforce =
     parseBoolean(env.GORTEX_ENFORCE) ??
-    (typeof project?.enforce === "boolean" ? project.enforce : undefined) ??
-    (typeof global?.enforce === "boolean" ? global.enforce : undefined) ??
+    (typeof project.enforce === "boolean" ? project.enforce : undefined) ??
+    (typeof global.enforce === "boolean" ? global.enforce : undefined) ??
     true;
 
   const toolsPreset =
-    firstString(env.GORTEX_TOOLS, project?.tools_preset, global?.tools_preset) ?? DEFAULT_TOOLS_PRESET;
+    toolsSpec(env.GORTEX_TOOLS) ??
+    toolsSpec(firstString(project.tools_preset)) ??
+    toolsSpec(firstString(global.tools_preset)) ??
+    DEFAULT_TOOLS_PRESET;
 
   const nativeMcp =
     parseBoolean(env.GORTEX_NATIVE_MCP) ??
-    (typeof project?.native_mcp === "boolean" ? project.native_mcp : undefined) ??
-    (typeof global?.native_mcp === "boolean" ? global.native_mcp : undefined) ??
+    (typeof project.native_mcp === "boolean" ? project.native_mcp : undefined) ??
+    (typeof global.native_mcp === "boolean" ? global.native_mcp : undefined) ??
     true;
 
   return { bin, hookArgv, enforce, toolsPreset, nativeMcp };
