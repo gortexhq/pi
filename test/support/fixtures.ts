@@ -18,7 +18,7 @@ export const CONFIG: GortexConfig = {
   bin: BIN,
   hookArgv: [BIN, "hook", "--agent=pi"],
   enforce: true,
-  toolsPreset: "core",
+  toolsPreset: "",
   // The suites that drive the extension's own client; native.test.ts covers Pi's.
   nativeMcp: false,
 };

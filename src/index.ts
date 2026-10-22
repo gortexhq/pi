@@ -11,7 +11,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 import { resolveConfig } from "./config.ts";
-import type { GortexConfig } from "./config.ts";
+import type { GortexConfig, ResolveConfigOptions } from "./config.ts";
 import { watchNativeEdits } from "./diff.ts";
 import { callHook, normalizeToolCall } from "./hook.ts";
 import {
@@ -145,8 +145,10 @@ function briefingInContext(ctx: ExtensionContext | undefined): boolean {
 
 /** Test seams. Pi itself calls the factory with the `pi` object alone. */
 export interface GortexExtensionOptions {
-  /** Pre-resolved configuration; resolveConfig() runs when this is absent. */
+  /** Fixed configuration; resolveConfig() runs per session when this is absent. */
   config?: GortexConfig;
+  /** resolveConfig() seams other than `cwd`, which comes from the session. */
+  resolve?: Omit<ResolveConfigOptions, "cwd">;
   /** Process seam for spawn/execFileSync. */
   deps?: ProcessDeps;
   /** Readiness cap override. */
@@ -160,11 +162,11 @@ export interface GortexExtensionOptions {
 }
 
 export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensionOptions = {}): void {
-  const config = options.config ?? resolveConfig();
-  // Pi 0.85's ExtensionAPI declares no `cwd`, so the hook envelope reads it
-  // defensively and falls back to the process cwd. A Pi version that grows the
-  // field is picked up when it exists.
-  const piCwd = (): string => (pi as { cwd?: string })?.cwd ?? process.cwd();
+  // The factory has no session cwd, so this first resolution reads the process
+  // cwd; session_start re-resolves against ctx.cwd, the directory a resumed
+  // session actually runs in.
+  const configFor = (cwd?: string): GortexConfig => options.config ?? resolveConfig({ ...options.resolve, cwd });
+  let config = configFor();
   const deps = options.deps ?? nodeProcessDeps;
   const readyWaitMs = options.readyWaitMs ?? READY_WAIT_MS;
   const nativeReadyWaitMs = options.nativeReadyWaitMs ?? NATIVE_READY_WAIT_MS;
@@ -173,12 +175,28 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
   // (which starts the daemon itself), registers the tools and renders them.
   // A binary that does not resolve, or a registration Pi refuses, falls back to
   // the extension's own client, which reports its failure to the model.
+  // Registered here when the factory's config allows, since Pi reads servers
+  // registered while extensions load on session_start.
   let nativeRefusal = "";
-  let native = ((): boolean => {
-    if (!config.nativeMcp || !supportsNativeMcp(pi) || !binaryResolves(config.bin)) return false;
+  let native = false;
+  let registered = config;
+  // `connector` is false when session_start found nothing to connect the server.
+  function registerNative(connector = true): void {
+    if (native) unregisterNativeServer(pi);
+    native = false;
+    registered = config;
+    nativeRefusal = "";
+    if (!connector || !config.nativeMcp || !supportsNativeMcp(pi) || !binaryResolves(config.bin)) return;
     nativeRefusal = registerNativeServer(pi, config);
-    return nativeRefusal === "";
-  })();
+    native = nativeRefusal === "";
+  }
+  registerNative();
+
+  // Whether the session's config asks for a different server than the one registered.
+  const channelChanged = (): boolean =>
+    registered.nativeMcp !== config.nativeMcp ||
+    registered.bin !== config.bin ||
+    registered.toolsPreset !== config.toolsPreset;
 
   // Latched for the whole session once the first turn has run the
   // session_start hook, whether or not it produced anything to inject.
@@ -263,7 +281,10 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
   // startSession holds the body of session_start so the readiness promise
   // above settles on every exit path, early returns included.
   async function startSession(ctx?: ExtensionContext): Promise<void> {
-    if (native && !mcpConnectorLoaded(pi)) {
+    config = configFor(ctx?.cwd);
+    const connector = mcpConnectorLoaded(pi);
+    if (channelChanged()) registerNative(connector);
+    if (native && !connector) {
       unregisterNativeServer(pi);
       native = false;
     }
@@ -326,7 +347,7 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
     const ready = native ? await waitForNativeTools(pi, nativeReadyWaitMs) : sessionDone;
     const decision = callHook(config.hookArgv, deps, {
       event: "session_start",
-      cwd: ctx?.cwd ?? piCwd(),
+      cwd: ctx?.cwd ?? process.cwd(),
     });
     // Pi's MCP keeps the handshake to itself, so the version comes from the briefing.
     if (native && decision.orientation) {
@@ -386,7 +407,7 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
       event: "tool_call",
       tool_name: norm.tool_name,
       tool_input: norm.tool_input,
-      cwd: ctx?.cwd ?? piCwd(),
+      cwd: ctx?.cwd ?? process.cwd(),
       session_id: (ctx as { sessionManager?: { sessionId?: string } })?.sessionManager?.sessionId ?? "",
       is_gortex_tool: isGortexTool,
     });
@@ -407,12 +428,13 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
     }
     return;
   };
-  if (config.enforce) pi.on("tool_call", enforceReadDiscipline);
+  // Registered unconditionally, since a session's own sidecar can turn enforcement on.
+  pi.on("tool_call", (event, ctx) => (config.enforce ? enforceReadDiscipline(event, ctx) : undefined));
 
   // After enforcement, so a blocked call is never snapshotted. Shell calls are
   // tracked on both channels; edits are snapshotted on Pi's built-in MCP only.
   watchNativeEdits(pi, () => native);
-  if (native) {
+  if (supportsNativeMcp(pi)) {
     // Pi < 1.0.1 has no tool renderers; the diffs are still stored.
     try {
       (pi as Partial<Pick<ExtensionAPI, "registerToolRenderer">>).registerToolRenderer?.(nativeRenderers);

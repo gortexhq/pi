@@ -46,29 +46,19 @@ export function isBelowVersion(actual: string, floor: string): boolean {
   return false;
 }
 
-// Presets the proxy has to be told about. The daemon's own default surface
-// already IS core/defer, so those pass nothing. Anything unrecognised (a typo,
-// a stale sidecar value) is NOT forwarded: server-side it would parse as a
-// one-tool allow-list and silently filter every promoted tool out of the
-// session. Fail open to the daemon's default surface instead.
-const FORWARDED_PRESETS = new Set(["edit", "nav", "readonly"]);
-
 /**
- * The variables `gortex mcp` needs on top of `env` to serve `toolsPreset`.
- * The daemon's own default surface already IS core/defer; only a recognised
- * non-default preset needs the proxy-side narrowing.
+ * The variables `gortex mcp` needs on top of `env` to serve `toolsPreset`, the
+ * spec resolveConfig validated (it already folds in the user's GORTEX_TOOLS).
+ * Both are always set, so an inherited value resolveConfig rejected never
+ * reaches the child; empty leaves the daemon's default surface.
  */
 export function presetEnv(
   toolsPreset: string,
   env: Record<string, string | undefined>,
 ): Record<string, string> {
-  const out: Record<string, string> = {};
-  const preset = toolsPreset.trim().toLowerCase();
-  const tools = env.GORTEX_TOOLS || (FORWARDED_PRESETS.has(preset) ? preset : "");
-  if (tools && !env.GORTEX_TOOLS) out.GORTEX_TOOLS = tools;
+  if (toolsPreset === "") return { GORTEX_TOOLS: "", GORTEX_TOOLS_MODE: "" };
   // Never let a preset hide-block tools promoted later by tools_search.
-  if (tools && !env.GORTEX_TOOLS_MODE) out.GORTEX_TOOLS_MODE = "defer";
-  return out;
+  return { GORTEX_TOOLS: toolsPreset, GORTEX_TOOLS_MODE: env.GORTEX_TOOLS_MODE?.trim() || "defer" };
 }
 
 export interface MCPStdioClientOptions {
@@ -123,6 +113,7 @@ export function ensureDaemon(bin: string, deps: ProcessDeps): void {
     const child = deps.spawn(bin, ["daemon", "start", "--detach"], {
       stdio: "ignore",
       detached: true,
+      windowsHide: true,
     });
     child.on("error", () => {}); // binary missing / spawn failure: swallow
     // No teardown counterpart, by design: the daemon is shared, long-lived
@@ -189,6 +180,7 @@ export class MCPStdioClient {
     const child = this.deps.spawn(this.bin, ["mcp"], {
       stdio: ["pipe", "pipe", "pipe"],
       env: this.childEnv(),
+      windowsHide: true,
     });
     this.child = child;
     this.chunks = [];
