@@ -88,8 +88,8 @@ point in the directory when the manifest resolves to nothing.
 ## Where the double stops
 
 The double models what the suites need and no more. Behaviour past that edge,
-such as promotion re-sync under real notification traffic, frame splitting, the
-frame size cap, a real model turn or a live daemon, is unverified here. A change
+such as promotion re-sync under real notification traffic, a real model turn or
+a live daemon, is unverified here. A change
 in that territory is verified by hand against a running Gortex, and the suite
 says as much rather than implying coverage it does not have.
 

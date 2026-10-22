@@ -153,6 +153,10 @@ export interface GortexExtensionOptions {
   readyWaitMs?: number;
   /** Override for the wait on Pi's built-in MCP connecting the gortex server. */
   nativeReadyWaitMs?: number;
+  /** tools/call timeout override for the extension's own client. */
+  callTimeoutMs?: number;
+  /** Frame size cap override for the extension's own client. */
+  maxFrameBytes?: number;
 }
 
 export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensionOptions = {}): void {
@@ -269,7 +273,13 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
     gortexToolNames.clear();
     withdrawnToolNames.clear();
     stopBridge();
-    const c = new MCPStdioClient({ bin: config.bin, toolsPreset: config.toolsPreset, deps });
+    const c = new MCPStdioClient({
+      bin: config.bin,
+      toolsPreset: config.toolsPreset,
+      deps,
+      callTimeoutMs: options.callTimeoutMs,
+      maxFrameBytes: options.maxFrameBytes,
+    });
     // Claim the slot before the first await: an overlapping
     // session_start (rapid /new or /reload) then sees and stops THIS
     // bridge instead of leaking its child mid-handshake.
