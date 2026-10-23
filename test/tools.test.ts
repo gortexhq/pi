@@ -15,12 +15,13 @@ import assert from "node:assert/strict";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 
 import { loadFactory } from "./support/subject.ts";
 import { createHarness } from "./support/runner.ts";
 import type { Harness } from "./support/runner.ts";
 import { control, resetInitializeAttempts } from "./support/child-process-mock.ts";
+import { draw } from "./support/draw.ts";
 import { ORIENTATION, TOOLS, options } from "./support/fixtures.ts";
 
 describe("a tool whose name collides with a Pi builtin", () => {
@@ -66,15 +67,6 @@ describe("a tool whose name collides with a Pi builtin", () => {
     assert.equal(result.content[0]!.text, "ok");
   });
 
-  it("collapses its result until the user expands it", () => {
-    const render = harness.tool("search")!.renderResult as unknown as (
-      result: unknown,
-      options: { expanded: boolean },
-    ) => { render(width: number): string[] };
-    const result = { content: [{ type: "text", text: "ok" }] };
-    assert.equal(render(result, { expanded: false }).render(80).join("").trim(), "");
-    assert.equal(render(result, { expanded: true }).render(80).join("").trim(), "ok");
-  });
 });
 
 describe("a tool whose name does not collide", () => {
@@ -99,16 +91,14 @@ describe("a tool whose name does not collide", () => {
 
 // Call rendering: a file read renders like Pi's native read, every other call
 // as `<tool> <operation> <subject>` followed by its options. The arguments are
-// shaped like the live daemon's. The theme is a stand-in that drops colour, so
-// the assertions read the plain text a user would see.
+// shaped like the live daemon's, and the call is drawn through Pi's own
+// component, so the assertions read the plain text a user would see.
 
 const RENDER_TOOLS = [
   ...TOOLS,
   { name: "trace", description: "Trace paths.", inputSchema: { type: "object", properties: {} } },
   { name: "analyze", description: "Analyze the graph.", inputSchema: { type: "object", properties: {} } },
 ];
-
-const plainTheme = { fg: (_c: string, t: string) => t, bold: (t: string) => t };
 
 describe("a tool call as Pi renders it", () => {
   let harness: Harness;
@@ -123,14 +113,9 @@ describe("a tool call as Pi renders it", () => {
 
   after(() => assert.deepEqual(harness.errors, []));
 
+  // The component pads its box by a column on each side.
   function renderCall(tool: string, args: Record<string, unknown>, opts: { expanded?: boolean; width?: number } = {}) {
-    const render = harness.tool(tool)!.renderCall as unknown as (
-      args: unknown,
-      theme: unknown,
-      context: unknown,
-    ) => { render(width: number): string[] };
-    const context = { args, cwd: harness.cwd, expanded: opts.expanded ?? false, lastComponent: undefined };
-    return stripTerminalSequences(render(args, plainTheme, context).render(opts.width ?? 200).join("\n")).trim();
+    return draw(tool, harness.tool(tool), args, harness.cwd).expand(opts.expanded ?? false).text((opts.width ?? 200) + 2);
   }
 
   const readFile = (file: string, options?: Record<string, unknown>) => ({

@@ -44,6 +44,9 @@ runs the suites under type stripping.
 - CI runs on Linux, macOS and Windows. Use `node:path` for paths and keep
   process spawning behind `src/runtime.ts`.
 - Update the README configuration table when config changes.
-- `docs/architecture.md` holds the important design decisions, briefly. Touch
-  it only when a decision changes, and leave the details to the code.
+- `docs/architecture.md` holds only the important design decisions, briefly:
+  ones that shape how the bridge works, such as its channels, the readiness
+  barrier or the failure posture. A bug fix, a feature or a visual change
+  (rendering, caps, wording) does not go there. Leave the file untouched
+  unless such a decision changes, and leave the details to the code.
 - Commit subjects use Conventional Commits (`feat:`, `fix:`, `docs:`, ...).

@@ -1,6 +1,7 @@
 # Architecture
 
-How the bridge is built, and why each piece is shaped the way it is. 
+How the bridge is built, and why each piece is shaped the way it is. Only the
+decisions that shape the bridge belong here; details live in the code.
 
 ## The problem
 
