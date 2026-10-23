@@ -15,7 +15,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { Text, stripTerminalSequences } from "@earendil-works/pi-tui";
+import { Text } from "@earendil-works/pi-tui";
 
 import type { EditDetails } from "../src/diff.ts";
 import { MCP_TOOL_PREFIX } from "../src/native.ts";
@@ -24,6 +24,7 @@ import { loadFactory } from "./support/subject.ts";
 import { createHarness } from "./support/runner.ts";
 import type { Harness } from "./support/runner.ts";
 import { control, resetInitializeAttempts } from "./support/child-process-mock.ts";
+import { draw } from "./support/draw.ts";
 import { NATIVE_CONFIG, ORIENTATION, options, withMcpConnector } from "./support/fixtures.ts";
 
 const schema = { type: "object", properties: {} };
@@ -33,8 +34,6 @@ const TOOLS = [
   { name: "batch_edit", description: "Apply a batch.", inputSchema: schema },
   { name: "search", description: "Search the graph.", inputSchema: schema },
 ];
-
-const plainTheme = { fg: (_c: string, t: string) => t, bold: (t: string) => t };
 
 /** The note of a result's only file. */
 function noteOf(details: EditDetails | undefined): string | undefined {
@@ -232,23 +231,16 @@ describe("a Gortex call that writes files", () => {
   });
 
   it("renders the diff without expanding, and the reply once expanded", () => {
-    const render = harness.tool("gortex_edit")!.renderResult as unknown as (
-      result: unknown,
-      options: { expanded: boolean },
-      theme: unknown,
-      context: unknown,
-    ) => { render(width: number): string[] };
     const result = {
       content: [{ type: "text", text: "status: applied" }],
       details: { diffs: [{ path: "src/a.ts", diff: "-2 two\n+2 TWO", patch: "" }] },
     };
-    const context = { cwd: harness.cwd, isError: false };
-    const view = (expanded: boolean) =>
-      stripTerminalSequences(render(result, { expanded }, plainTheme, context).render(80).join("\n"));
-    assert.match(view(false), /-2 two/);
-    assert.match(view(false), /\+2 TWO/);
-    assert.doesNotMatch(view(false), /status: applied/);
-    assert.match(view(true), /status: applied/);
+    const drawing = draw("gortex_edit", harness.tool("gortex_edit"), {}, harness.cwd).result(result);
+    const collapsed = drawing.text();
+    assert.match(collapsed, /-2 two/);
+    assert.match(collapsed, /\+2 TWO/);
+    assert.doesNotMatch(collapsed, /status: applied/);
+    assert.match(drawing.expand().text(), /status: applied/);
   });
 });
 
@@ -355,38 +347,26 @@ describe("a Gortex call that writes files on Pi's built-in MCP", () => {
   });
 
   it("draws a note in place of a diff", () => {
-    const renderers = harness.runner.resolveToolRenderers(EDIT, () => ({ renderResult: () => new Text("", 0, 0) }) as never)!;
-    const result = {
+    const renderers = harness.runner.resolveToolRenderers(EDIT, () => ({ renderResult: () => new Text("", 0, 0) }));
+    const drawing = draw(EDIT, renderers, {}, harness.cwd).result({
       content: [{ type: "text", text: "status: applied" }],
       details: { diffs: [{ path: "src/a.ts", diff: "", patch: "", note: "line endings LF -> CRLF" }] },
-    };
-    const view = stripTerminalSequences(
-      renderers.renderResult!(result as never, { expanded: false, isPartial: false }, plainTheme as never, { cwd: harness.cwd, isError: false } as never)
-        .render(80)
-        .join("\n"),
-    );
-    assert.match(view, /src\/a\.ts line endings LF -> CRLF/);
+    });
+    assert.match(drawing.text(), /src\/a\.ts line endings LF -> CRLF/);
   });
 
   it("draws the diff above Pi's result, which shows once expanded", () => {
     const base = {
       renderResult: () => new Text("PI-MCP-OUTPUT", 0, 0),
     };
-    const renderers = harness.runner.resolveToolRenderers(EDIT, () => base as never)!;
-    const result = {
+    const drawing = draw(EDIT, harness.runner.resolveToolRenderers(EDIT, () => base), {}, harness.cwd).result({
       content: [{ type: "text", text: "status: applied" }],
       details: { diffs: [{ path: "src/a.ts", diff: "-2 two\n+2 TWO", patch: "" }] },
-    };
-    const view = (expanded: boolean) =>
-      stripTerminalSequences(
-        renderers.renderResult!(result as never, { expanded, isPartial: false }, plainTheme as never, { cwd: harness.cwd, isError: false } as never)
-          .render(80)
-          .join("\n"),
-      );
-    assert.match(view(false), /\+2 TWO/);
-    assert.doesNotMatch(view(false), /PI-MCP-OUTPUT/);
-    assert.match(view(true), /PI-MCP-OUTPUT/);
-    assert.equal(harness.runner.resolveToolRenderers("bash", () => base as never), base);
+    });
+    assert.match(drawing.text(), /\+2 TWO/);
+    assert.doesNotMatch(drawing.text(), /PI-MCP-OUTPUT/);
+    assert.match(drawing.expand().text(), /PI-MCP-OUTPUT/);
+    assert.equal(harness.runner.resolveToolRenderers("bash", () => base), base);
     assert.equal(harness.runner.resolveToolRenderers(EDIT, () => undefined), undefined, "Pi's MCP fallback must stay reachable");
   });
 
@@ -394,15 +374,13 @@ describe("a Gortex call that writes files on Pi's built-in MCP", () => {
     const base = {
       renderResult: () => new Text("PI-MCP-OUTPUT", 0, 0),
     };
-    const renderers = harness.runner.resolveToolRenderers(`${MCP_TOOL_PREFIX}search`, () => base as never)!;
-    const result = { content: [{ type: "text", text: "rows" }] };
+    const renderers = harness.runner.resolveToolRenderers(`${MCP_TOOL_PREFIX}search`, () => base);
     const view = (expanded: boolean, isError = false) =>
-      stripTerminalSequences(
-        renderers.renderResult!(result as never, { expanded, isPartial: false }, plainTheme as never, { cwd: harness.cwd, isError } as never)
-          .render(80)
-          .join("\n"),
-      );
-    assert.equal(view(false).trim(), "");
+      draw(`${MCP_TOOL_PREFIX}search`, renderers, {}, harness.cwd)
+        .result({ content: [{ type: "text", text: "rows" }], isError })
+        .expand(expanded)
+        .text();
+    assert.doesNotMatch(view(false), /PI-MCP-OUTPUT/);
     assert.match(view(true), /PI-MCP-OUTPUT/);
     assert.match(view(false, true), /PI-MCP-OUTPUT/);
   });
