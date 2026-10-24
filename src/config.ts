@@ -19,13 +19,11 @@ export interface SidecarConfig {
   enforce?: boolean;
   /** Eager MCP tool preset (core | full | agent | edit | nav | readonly | localization) or a tool spec. */
   tools_preset?: string;
-  /** false keeps the extension's own MCP client on a Pi that has built-in MCP. */
-  native_mcp?: boolean;
 }
 
 /** Everything the extension needs to run, fully resolved. */
 export interface GortexConfig {
-  /** Binary used for `daemon start`, `mcp` and `hook`. */
+  /** Binary Pi runs as the `gortex mcp` server, and the hook bridge runs as `hook`. */
   bin: string;
   /** Full argv for the hook bridge, e.g. [bin, "hook", "--agent=pi", "--mode=enrich"]. */
   hookArgv: string[];
@@ -33,8 +31,6 @@ export interface GortexConfig {
   enforce: boolean;
   /** GORTEX_TOOLS for `gortex mcp`; empty leaves the daemon's default surface. */
   toolsPreset: string;
-  /** Whether to hand the tool channel to Pi's built-in MCP when Pi has one. */
-  nativeMcp: boolean;
 }
 
 /** Seams for tests; every one defaults to the real environment. */
@@ -209,11 +205,5 @@ export function resolveConfig(opts: ResolveConfigOptions = {}): GortexConfig {
     toolsSpec(firstString(global.tools_preset)) ??
     DEFAULT_TOOLS_PRESET;
 
-  const nativeMcp =
-    parseBoolean(env.GORTEX_NATIVE_MCP) ??
-    (typeof project.native_mcp === "boolean" ? project.native_mcp : undefined) ??
-    (typeof global.native_mcp === "boolean" ? global.native_mcp : undefined) ??
-    true;
-
-  return { bin, hookArgv, enforce, toolsPreset, nativeMcp };
+  return { bin, hookArgv, enforce, toolsPreset };
 }

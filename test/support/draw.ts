@@ -12,7 +12,7 @@ const ui = { requestRender() {} } as unknown as TUI;
 
 let themed = false;
 
-export interface ToolResult {
+interface ToolResult {
   content: { type: string; text?: string }[];
   details?: unknown;
   isError?: boolean;

@@ -6,22 +6,24 @@
 // graph. Node's type stripping is a different loader, so this is the only suite
 // that would catch "the published package does not load at all".
 //
-// No gortex binary exists here, so the bridge fails open, which makes this
-// the failure path's test too.
+// No MCP connector is loaded and no gortex binary exists here, so the
+// extension fails open, which makes this the failure path's test too.
 //
 // A second load copies the package to a directory with no node_modules above
 // it. The extension imports Pi's packages at runtime, and only Pi's loader
 // resolving them to the running Pi lets that copy load at all.
 
-import { describe, it, before } from "node:test";
+import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { cpSync, existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createPackagedHarness } from "./support/runner.ts";
+import { assertNoRunnerErrors, createPackagedHarness } from "./support/runner.ts";
 import type { ContextMessage, Harness } from "./support/runner.ts";
+
+after(assertNoRunnerErrors);
 
 const PACKAGE_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -31,7 +33,7 @@ describe("loaded through Pi's own discovery", () => {
 
   before(async () => {
     // Resolved by the extension at factory time, which is during the load
-    // below. Spawning it fails, and failing open is the behaviour under test.
+    // below. Running the hook fails, and failing open is the behaviour under test.
     process.env.GORTEX_BIN = path.join(PACKAGE_ROOT, "does-not-exist-gortex");
     delete process.env.GORTEX_HOOK_MODE;
     delete process.env.GORTEX_ENFORCE;
@@ -59,22 +61,20 @@ describe("loaded through Pi's own discovery", () => {
     }
   });
 
-  // A binary that does not resolve keeps the extension's own client, whose
-  // spawn failure is what reaches the model.
-  it("reports the unreachable bridge to the model", () => {
+  // Pi's MCP extension is not loaded here, which is checked before the binary.
+  it("tells the model graph tools are unavailable, and why", () => {
     assert.equal(turn1.length, 1);
     assert.match(turn1[0]!.content, /graph tools are unavailable/i);
+    assert.match(turn1[0]!.content, /MCP support is not loaded/);
   });
 
-  it("names /reload as the recovery", () => {
-    assert.ok(turn1[0]!.content.includes("/reload"));
-  });
-
-  it("registers no tools when the bridge is down", () => {
+  it("registers no server and no tools", () => {
+    assert.deepEqual(harness.mcpServers(), []);
     assert.deepEqual(harness.tools(), []);
   });
 
-  it("lets tool calls through rather than blocking on a dead hook", () => {
+  it("lets tool calls through when graph tools are unavailable", async () => {
+    assert.equal(await harness.toolCall("read", { path: "src/a.ts" }), undefined);
     assert.deepEqual(harness.errors, []);
   });
 });

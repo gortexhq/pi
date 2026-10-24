@@ -11,6 +11,7 @@
 // load the developer's own ~/.pi extensions), and an in-memory session manager
 // that writes nothing.
 
+import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,7 +32,6 @@ import type {
   ExtensionError,
   ExtensionRuntime,
   RegisteredMcpServer,
-  RegisteredTool,
   SlashCommandInfo,
   ToolCallEventResult,
   ToolInfo,
@@ -66,7 +66,7 @@ export interface Harness {
   /** Errors the runner swallowed out of a handler; real emit() never rejects. */
   errors: ExtensionError[];
   cwd: string;
-  /** session_start, as Pi emits it. */
+  /** session_start, as Pi emits it, then Pi's check for servers nothing connects. */
   sessionStart(reason?: string): Promise<unknown>;
   /** session_shutdown, as Pi emits it before tearing the extension runtime down. */
   sessionShutdown(reason?: "quit" | "reload" | "new" | "resume" | "fork"): Promise<unknown>;
@@ -84,9 +84,6 @@ export interface Harness {
   session: SessionManager;
   toolCall(toolName: string, input: Record<string, unknown>): Promise<ToolCallEventResult | undefined>;
   tools(): string[];
-  /** The tools offered to the model. */
-  activeTools(): string[];
-  tool(name: string): RegisteredTool["definition"] | undefined;
   /** The files Pi loaded this extension from. */
   extensionPaths(): string[];
   /** MCP servers the extension registered with pi.registerMcpServer(). */
@@ -98,18 +95,8 @@ export interface Harness {
 // Only the members this extension touches are implemented; the rest stay
 // unwired, which is what pi-mono's own runner tests do. Typing the partial
 // keeps sendMessage checked against Pi's real SendMessageHandler.
-function extensionActions(
-  sent: unknown[],
-  runner: () => ExtensionRunner,
-  active: { names: string[] | null },
-): ExtensionActions {
-  const registered = () => runner().getAllRegisteredTools().map((t) => t.definition.name);
+function extensionActions(sent: unknown[], runner: () => ExtensionRunner): ExtensionActions {
   const partial: Partial<ExtensionActions> = {
-    // Pi activates every extension tool unless the active set was narrowed.
-    getActiveTools: () => active.names ?? registered(),
-    setActiveTools: (names) => {
-      active.names = [...names];
-    },
     sendMessage: (message) => {
       sent.push(message);
     },
@@ -117,6 +104,8 @@ function extensionActions(
       runner().getAllRegisteredTools().map((t) => ({ name: t.definition.name }) as ToolInfo),
     getCommands: () =>
       runner().getRegisteredCommands().map((c) => ({ name: c.invocationName }) as SlashCommandInfo),
+    // The harness reads the registry live, so a tool registered mid-session needs no refresh.
+    refreshTools: () => {},
   };
   return partial as ExtensionActions;
 }
@@ -184,7 +173,7 @@ export async function createHarness(
  * The same harness, loaded the way a user's Pi does it: through Pi's own
  * discovery, which reads package.json's `pi.extensions` manifest and loads the
  * TypeScript with jiti. Nothing is injected, so the extension resolves its own
- * config from the environment and spawns for real, so point GORTEX_BIN
+ * config from the environment and runs the hook for real, so point GORTEX_BIN
  * somewhere harmless before calling.
  */
 export async function createPackagedHarness(packageRoot: string): Promise<Harness> {
@@ -201,6 +190,14 @@ export async function createPackagedHarness(packageRoot: string): Promise<Harnes
   return buildHarness(extensions, runtime, cwd);
 }
 
+// Every runner's swallowed errors, so a suite can assert them all at once.
+const collected: ExtensionError[][] = [];
+
+/** Asserts no harness built in this file collected a runner error; register with after(). */
+export function assertNoRunnerErrors(): void {
+  assert.deepEqual(collected.flat(), []);
+}
+
 function buildHarness(
   extensions: Extension[],
   runtime: ExtensionRuntime,
@@ -209,6 +206,7 @@ function buildHarness(
 ): Harness {
   const sent: unknown[] = [];
   const errors: ExtensionError[] = [];
+  collected.push(errors);
   let added: ContextMessage[] = [];
   const runner = new ExtensionRunner(
     extensions,
@@ -220,8 +218,7 @@ function buildHarness(
     new ModelRegistry(undefined as never),
   );
   runner.onError((err) => errors.push(err));
-  const active: { names: string[] | null } = { names: null };
-  runner.bindCore(extensionActions(sent, () => runner, active), extensionContextActions());
+  runner.bindCore(extensionActions(sent, () => runner), extensionContextActions());
 
   // Without a UI context the runner reports hasUI false, so the extension's
   // user-facing warnings would be skipped rather than asserted on.
@@ -239,8 +236,10 @@ function buildHarness(
     errors,
     cwd,
     notifications,
-    sessionStart(reason = "startup") {
-      return runner.emit({ type: "session_start", reason } as Parameters<ExtensionRunner["emit"]>[0]);
+    async sessionStart(reason = "startup") {
+      const result = await runner.emit({ type: "session_start", reason } as Parameters<ExtensionRunner["emit"]>[0]);
+      runner.reportUnhandledMcpServers();
+      return result;
     },
     sessionShutdown(reason: "quit" | "reload" | "new" | "resume" | "fork" = "quit") {
       return runner.emit({ type: "session_shutdown", reason } as Parameters<ExtensionRunner["emit"]>[0]);
@@ -281,12 +280,6 @@ function buildHarness(
     },
     tools() {
       return runner.getAllRegisteredTools().map((t) => t.definition.name);
-    },
-    activeTools() {
-      return active.names ?? runner.getAllRegisteredTools().map((t) => t.definition.name);
-    },
-    tool(name) {
-      return runner.getToolDefinition(name);
     },
     extensionPaths() {
       return runner.getExtensionPaths();

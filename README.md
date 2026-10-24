@@ -14,15 +14,13 @@ savings come from. It is a single static binary with no dependency chain,
 and it covers 257 languages through tree-sitter.
 
 This extension connects the two. It hands `gortex mcp` to Pi's built-in MCP,
-or runs its own MCP client with `native_mcp` off. Read discipline goes through
-`gortex hook` on both.
+and read discipline goes through `gortex hook`.
 
 ## What it does
 
-- **Registers Gortex's graph tools as native Pi tools**, through Pi's
-  built-in MCP or over the extension's own `gortex mcp` child per session. The
-  deferred catalogue is reached through the daemon's own `tools_search`, and
-  promoted tools appear in Pi's registry.
+- **Hands Gortex's graph tools to Pi's built-in MCP**, which offers them to
+  the model as `mcp__gortex__<tool>`. The rest of the catalogue is discovered
+  through the daemon's own `tools_search`.
 - **Applies read discipline.** Pi's tool calls are forwarded to
   `gortex hook --agent=pi`, which answers block / soft guidance / nothing
   according to the posture you configured. Gortex owns that logic, so the
@@ -34,11 +32,12 @@ See [docs/architecture.md](docs/architecture.md) for how it works.
 
 ## Requirements
 
-- **Node 24+**, **Pi 1.0+**
+- **Node 24+**, **Pi 1.0+** with its built-in MCP loaded (not `--no-mcp`)
 - **The `gortex` binary** on `PATH`, **v0.61.2 or newer**. See
   [Gortex installation](https://github.com/zzet/gortex/blob/main/docs/installation.md).
-  The extension starts the shared daemon itself and never blocks Pi's startup
-  on it, and warns you at session start when the binary is older than that.
+  `gortex mcp` starts the shared daemon itself, and the extension never blocks
+  Pi's startup on it. It warns you on the first turn when the daemon is older
+  than that.
   Run `gortex upgrade` to fix it.
 
 ## Install
@@ -69,7 +68,6 @@ environment -> `<session cwd>/.pi/gortex.json` -> `<agent dir>/extensions/gortex
 | `hook_mode`    | `GORTEX_HOOK_MODE` | `deny`             | Posture: `deny`, `enrich`, `consult-unlock`, `nudge` (`adaptive-nudge` is an alias). |
 | `enforce`      | `GORTEX_ENFORCE`   | `true`             | `false` keeps the graph tools and the briefing, and wires no enforcement. |
 | `tools_preset` | `GORTEX_TOOLS`     | daemon's default   | Eager MCP surface: a Gortex preset (`core`, `full`, `agent`, `edit`, `nav`, `readonly`, `localization`), optionally followed by comma-separated tool names and `+tool`/`-tool` changes, e.g. `nav,+edit_file`. A value that does not open with a preset is ignored. |
-| `native_mcp`   | `GORTEX_NATIVE_MCP` | `true`            | Register `gortex mcp` with Pi's built-in MCP. `false` keeps the extension's own client. |
 
 ```json
 {
@@ -82,17 +80,21 @@ environment -> `<session cwd>/.pi/gortex.json` -> `<agent dir>/extensions/gortex
 The extension reads its configuration at every session start, from the
 directory the session runs in, so a change takes effect on `/reload` or `/new`.
 
-**Pi's own `mcp.json` wins.** With `native_mcp` on, the extension registers a
-server named `gortex`. A `gortex` entry in `~/.pi/agent/mcp.json` or
-`.pi/mcp.json` replaces it, including its exposure, and Pi's default exposure
-there is `codemode`, which keeps the tools out of the model's tool list. Leave
-Gortex out of `mcp.json`, or set `"exposure": "direct"` on that entry. A
-Gortex server configured under another name runs as a second connection, and
-read discipline treats its tools as non-graph calls.
+**Pi's own `mcp.json` wins.** The extension registers a server named `gortex`. A
+`gortex` entry in `~/.pi/agent/mcp.json` or `.pi/mcp.json` replaces it,
+including its exposure, and Pi's default exposure there is `codemode`, which
+keeps the tools out of the model's tool list. Leave Gortex out of `mcp.json`, or
+set `"exposure": "direct"` on that entry. A Gortex server configured under
+another name runs as a second connection, and read discipline treats its tools
+as non-graph calls.
 
 **If the graph tools go missing**, the first turn of the session says so and
-names `/reload` as the retry. The bridge fails open, always: an absent binary or
-a daemon that is down costs the session its graph tools, never the session.
+why: Pi's MCP support is not loaded, the gortex binary was not found, or Pi
+refused the registration. Fix the cause, then `/reload`, or restart Pi with MCP
+enabled when it was turned off. The extension fails open, always: an absent
+binary or a daemon that is down costs the session its graph tools, never the
+session. When the first turn finds no graph tools, Pi's own tools are not held
+to read discipline until some appear.
 
 ## Develop
 
