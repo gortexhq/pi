@@ -5,9 +5,19 @@
   "keywords": [
     "pi-package",
     "pi-extension",
+    "pi-coding-agent",
     "gortex",
     "mcp",
-    "code-graph"
+    "model-context-protocol",
+    "code-graph",
+    "code-intelligence",
+    "knowledge-graph",
+    "ai-agents",
+    "coding-agent",
+    "context-window-optimization",
+    "tokens",
+    "local-first",
+    "developer-tools"
   ],
   "homepage": "https://github.com/gortexhq/pi#readme",
   "bugs": {
