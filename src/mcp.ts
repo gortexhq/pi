@@ -2,12 +2,10 @@
 // and Pi owns the connection, the tool registry and the rendering. See
 // docs/architecture.md.
 
-import { accessSync, constants, statSync } from "node:fs";
-import { delimiter, join } from "node:path";
-
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import type { GortexConfig } from "./config.ts";
+import { resolveExecutable } from "./runtime.ts";
 
 const MCP_SERVER_NAME = "gortex";
 /** Pi names a server's tools `mcp__<server>__<tool>`. */
@@ -101,20 +99,7 @@ export function registerServer(pi: ExtensionAPI, config: GortexConfig): string {
  * read as one still connecting.
  */
 export function binaryResolves(bin: string, env: Record<string, string | undefined> = process.env): boolean {
-  const exts = process.platform === "win32" ? ["", ...(env.PATHEXT ?? ".EXE;.CMD;.BAT").split(";")] : [""];
-  const candidates = /[\\/]/.test(bin)
-    ? [bin]
-    : (env.PATH ?? "").split(delimiter).filter(Boolean).map((dir) => join(dir, bin));
-  return candidates.some((path) =>
-    exts.some((ext) => {
-      try {
-        accessSync(path + ext, constants.X_OK);
-        return statSync(path + ext).isFile();
-      } catch {
-        return false;
-      }
-    }),
-  );
+  return resolveExecutable(bin, env) !== undefined;
 }
 
 /**
