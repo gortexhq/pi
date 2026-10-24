@@ -1,15 +1,15 @@
 // Diffs for Gortex's file-writing tools. The daemon reports an applied edit
-// without its content, so the bridge snapshots the files a call names, runs
-// the call, and diffs what changed in Pi's own edit format.
+// without its content, so the extension snapshots the files a call names
+// before Pi runs it, and diffs what changed in Pi's own edit format.
 
 import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
-import { generateDiffString, generateUnifiedPatch, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import { generateDiffString, generateUnifiedPatch } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { bareToolName, isNativeGortexTool } from "./native.ts";
+import { bareToolName, isGortexTool } from "./mcp.ts";
 
 export interface FileDiff {
   /** Relative to the session's cwd. */
@@ -59,8 +59,8 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
-/** isFileEdit reports whether a call writes files the bridge can name up front. */
-export function isFileEdit(tool: string, params: Record<string, unknown>): boolean {
+/** isFileEdit reports whether a call writes files the extension can name up front. */
+function isFileEdit(tool: string, params: Record<string, unknown>): boolean {
   if (LEGACY_EDIT_TOOLS.has(tool)) return !isDryRun(params);
   return tool === "edit" && EDIT_OPERATIONS.has(String(params.operation)) && !isDryRun(params);
 }
@@ -130,7 +130,7 @@ function repoRoot(cwd: string): string {
  * both forms are tried against cwd and the repo root; a candidate that does
  * not exist simply never changes.
  */
-export function candidatePaths(params: Record<string, unknown>, cwd: string): string[] {
+function candidatePaths(params: Record<string, unknown>, cwd: string): string[] {
   const args = flatten(params);
   const raw = [...namedPaths(args), ...batchItems(args.changes ?? args.edits).flatMap(namedPaths)];
   const bases = [...new Set([cwd, repoRoot(cwd)])];
@@ -246,7 +246,7 @@ function diffSnapshots(paths: string[], before: Snapshot[], after: Snapshot[], c
 }
 
 /** editDetails shapes diffs as a result's details; no diffs give no fields. */
-export function editDetails(diffs: FileDiff[]): EditDetails {
+function editDetails(diffs: FileDiff[]): EditDetails {
   if (diffs.length === 0) return {};
   const details: EditDetails = { diffs };
   const patch = diffs.map((d) => d.patch).join("");
@@ -259,7 +259,7 @@ export function editDetails(diffs: FileDiff[]): EditDetails {
 }
 
 // A shell command can write any file, so a diff taken while one runs may
-// include its writes. Tracked on both channels through Pi's events.
+// include its writes.
 const SHELL_TOOLS = new Set(["bash", "powershell"]);
 const shellCallsRunning = new Set<string>();
 let shellCallsSeen = 0;
@@ -275,31 +275,6 @@ const SHELL_NOTE = "not diffed: a shell command ran at the same time";
 
 function shellNotes(diffs: FileDiff[]): FileDiff[] {
   return diffs.map(({ path }) => ({ path, diff: "", patch: "", note: SHELL_NOTE }));
-}
-
-function withLocks<T>(paths: string[], fn: () => Promise<T>): Promise<T> {
-  return paths.reduceRight<() => Promise<T>>((next, path) => () => withFileMutationQueue(path, next), fn)();
-}
-
-/**
- * withFileDiffs runs call while holding Pi's per-file mutation lock on every
- * candidate path, and returns its result with a diff for each file it changed.
- * A failed call is not diffed.
- */
-export async function withFileDiffs<T>(
-  paths: string[],
-  cwd: string,
-  call: () => Promise<T>,
-  succeeded: (result: T) => boolean,
-): Promise<{ result: T; diffs: FileDiff[] }> {
-  return withLocks(paths, async () => {
-    const overlapped = shellWindow();
-    const before = await snapshotAll(paths);
-    const result = await call();
-    if (!succeeded(result)) return { result, diffs: [] };
-    const diffs = diffSnapshots(paths, before, await snapshotAll(paths), cwd);
-    return { result, diffs: overlapped() ? shellNotes(diffs) : diffs };
-  });
 }
 
 interface PendingEdit {
@@ -318,14 +293,14 @@ function contest(entry: PendingEdit, path: string, by: string): void {
 }
 
 /**
- * watchNativeEdits diffs the gortex tools Pi's built-in MCP runs. Pi executes
+ * watchEdits diffs the gortex tools Pi's built-in MCP runs. Pi executes
  * those, so the files are read on `tool_call` and again on `tool_result`, which
  * stores the diffs in the result's details. Pi prepares a whole parallel batch
  * before running any of it, so no lock can span the call; a path two calls in
  * flight write gets no diff instead. Register it after every handler that may
  * block, since a blocked call never reaches `tool_result`.
  */
-export function watchNativeEdits(pi: ExtensionAPI, active: () => boolean): void {
+export function watchEdits(pi: ExtensionAPI): void {
   const pending = new Map<string, PendingEdit>();
 
   function claim(id: string, entry: PendingEdit): void {
@@ -353,14 +328,14 @@ export function watchNativeEdits(pi: ExtensionAPI, active: () => boolean): void 
       shellCallsSeen++;
     }
     try {
-      if (!active() || event.parentToolCallId) return;
+      if (event.parentToolCallId) return;
       const input = (event.input ?? {}) as Record<string, unknown>;
       const cwd = ctx.cwd;
       if (PI_WRITE_TOOLS.has(event.toolName) && typeof input.path === "string") {
         claim(event.toolCallId, { cwd, paths: [resolve(cwd, input.path)], contested: new Map() });
         return;
       }
-      if (!isNativeGortexTool(event.toolName) || !isFileEdit(bareToolName(event.toolName), input)) return;
+      if (!isGortexTool(event.toolName) || !isFileEdit(bareToolName(event.toolName), input)) return;
       const paths = candidatePaths(input, cwd);
       if (paths.length === 0) return;
       const overlapped = shellWindow();

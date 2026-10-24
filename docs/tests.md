@@ -16,16 +16,24 @@ earns its place, is stated in that suite's own header.
 
 Pi runs for real. Every behavioural suite drives the extension through Pi's own
 extension runner, loaded through Pi's own resource loader. Gortex is doubled: a
-stand-in for the process seam answers the handshake, the tool list and the tool
-calls, so no binary is spawned and no daemon is required.
+stand-in for the process seam answers `gortex hook`, so no binary is run and no
+daemon is required.
+
+Pi's MCP extension is not loaded, so nothing connects the registered server.
+A suite stands in for it where it matters: a `/mcp` command and an
+`mcp_servers_change` handler mark a connector as loaded, and a stand-in tool
+registered under its `mcp__gortex__` name marks the server as connected. Edit
+diffs are driven through the `tool_call` and `tool_result` events Pi would emit
+around the call. The harness runs Pi's check for registered servers nothing
+connects after every `session_start`, as Pi does.
 
 The split follows from what each side is. Pi is the contract this extension must
 not get wrong, and its lifecycle ordering is the property the readiness barrier
 rests on (see [the architecture](architecture.md#the-readiness-barrier)). A
 hand-written stub of that ordering would assert our own belief about Pi back to
 ourselves, and would keep passing on the day Pi changed. Gortex is our own
-dependency, whose timing has to be controllable to the millisecond for a barrier
-to be testable at all.
+dependency, and when its tools appear has to be controllable for a barrier to
+be testable at all.
 
 So: make Pi the oracle, and keep the daemon out of the run.
 
@@ -43,8 +51,8 @@ new DefaultResourceLoader({
 });
 ```
 
-The config and the process double ride that closure, while Pi owns the
-lifecycle, the tool registry and the event payload shapes.
+The config and the hook double ride that closure, while Pi owns the lifecycle,
+the tool registry and the event payload shapes.
 
 ## Hermetic by construction
 
@@ -56,18 +64,18 @@ the developer happens to have installed.
 
 ## Assert structure, never wall-clock
 
-A suite that needs registration to still be in flight gates the double and
-releases it deliberately, so the state under test holds for as long as the
-machine takes, rather than flaking on a loaded CI runner. Where a bound is
-asserted, it is a bound the extension itself sets, driven by a cap the suite
-passes in.
+A suite that needs the tools to still be missing withholds `session_start` or
+registers the stand-in tool when it decides, so the state under test holds for
+as long as the machine takes, rather than flaking on a loaded CI runner. Where a
+bound is asserted, it is a bound the extension itself sets, driven by a cap the
+suite passes in.
 
 ## Fence what cannot be asserted
 
-Some setups rest on a property no assertion reaches, such as a child being
-spawned before the handler's first suspension point. A suite that relies on one
-checks it and throws when it stops holding. A gate that silently targets nothing
-leaves the suite green while testing nothing.
+Some setups rest on a property no assertion reaches, such as no `node_modules`
+sitting above a copy that must load through Pi's loader alone. A suite that
+relies on one checks it and throws when it stops holding. A gate that silently
+targets nothing leaves the suite green while testing nothing.
 
 ## Two properties of the real runner
 
@@ -88,21 +96,21 @@ point in the directory when the manifest resolves to nothing.
 ## Where the double stops
 
 The double models what the suites need and no more. Behaviour past that edge,
-such as promotion re-sync under real notification traffic, a real model turn or
-a live daemon, is unverified here. A change
-in that territory is verified by hand against a running Gortex, and the suite
-says as much rather than implying coverage it does not have.
+such as Pi's MCP extension connecting a real `gortex mcp`, promotion through
+`tools/list_changed`, a real model turn or a live daemon, is unverified here. A
+change in that territory is verified by hand against a running Pi and Gortex,
+and the suite says as much rather than implying coverage it does not have.
 
 ## Pinning
 
 The Pi devDependency is pinned tight on purpose. Pi's runner's method surface
 has been renamed without a changelog entry before, so a tight pin
 turns that into a red build rather than a silently skipped suite. The runtime
-peer dependency stays wide.
+peer dependency is a floor, Pi 1.0, the first Pi this extension supports.
 
 ## Layout
 
-Shared machinery (the harness, the subject loader, the process double, the
+Shared machinery (the harness, the subject loader, the hook double, the
 shared fixtures) lives in `test/support`. Per-suite choreography stays in the
 suite: for the barrier, when each event fires relative to the others is the
 thing under test.

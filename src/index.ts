@@ -1,6 +1,6 @@
 // The extension factory: the readiness barrier and the Pi lifecycle wiring for
-// both channels, graph tools over the MCP bridge and read discipline over the
-// hook bridge. See docs/architecture.md for the design.
+// both channels, graph tools through Pi's built-in MCP and read discipline over
+// the hook bridge. See docs/architecture.md for the design.
 
 import type {
   BeforeAgentStartEventResult,
@@ -12,93 +12,76 @@ import type {
 
 import { resolveConfig } from "./config.ts";
 import type { GortexConfig, ResolveConfigOptions } from "./config.ts";
-import { watchNativeEdits } from "./diff.ts";
+import { watchEdits } from "./diff.ts";
 import { callHook, normalizeToolCall } from "./hook.ts";
 import {
-  MCPStdioClient,
   MIN_GORTEX_VERSION,
-  PROTOCOL_VERSION,
-  ensureDaemon,
-  isBelowVersion,
-} from "./mcp-client.ts";
-import {
-  NATIVE_READY_WAIT_MS,
+  TOOLS_READY_WAIT_MS,
   bareToolName,
   binaryResolves,
   daemonVersionFromBriefing,
-  isNativeGortexTool,
+  isBelowVersion,
+  gortexToolsReady,
+  isGortexTool,
   mcpConnectorLoaded,
-  registerNativeServer,
-  unregisterNativeServer,
-  supportsNativeMcp,
-  waitForNativeTools,
-} from "./native.ts";
-import { nativeRenderers } from "./render.ts";
+  registerServer,
+  supportsMcp,
+  waitForGortexTools,
+} from "./mcp.ts";
+import { gortexRenderers } from "./render.ts";
 import { nodeProcessDeps } from "./runtime.ts";
 import type { ProcessDeps } from "./runtime.ts";
-import {
-  clearSyncTimer,
-  registerGortexTools,
-  scheduleSyncTools,
-} from "./tools.ts";
-import {
-  getBridgeError,
-  getClient,
-  getVersionWarning,
-  gortexToolNames,
-  setBridgeError,
-  setClient,
-  setVersionWarning,
-  withdrawnToolNames,
-} from "./state.ts";
 
 export type { GortexConfig, SidecarConfig } from "./config.ts";
 
 /**
- * How long before_agent_start waits for session_start to finish. Pi arms the
+ * How long before_agent_start waits for session_start to run. Pi arms the
  * editor's submit handler before session_start runs, at startup and across
- * /reload and /new, so a fast prompt can reach the agent loop while
- * registration is still pending. Capped so a wedged daemon costs the first turn
- * seconds; start() alone can take ~2 min.
+ * /reload and /new, so a fast prompt can reach the agent loop before the
+ * server is registered. Capped so a session_start that never comes costs the
+ * first turn seconds, not the session.
  */
-export const READY_WAIT_MS = 15_000;
+const READY_WAIT_MS = 15_000;
 
 /**
  * Compares the daemon against what this extension is built for and, on a skew,
  * tells both audiences: the user through Pi's warning channel (which never
- * enters model context), the model through the orientation, so it knows a tool
- * may misbehave. Advisory only: the session keeps every tool it registered,
- * matching the fail-open posture in docs/architecture.md.
+ * enters model context), the model through the returned line, so it knows a
+ * tool may misbehave. Advisory only, matching the fail-open posture in
+ * docs/architecture.md. Returns "" when there is no skew.
  */
-function reportVersionSkew(
-  ctx: ExtensionContext | undefined,
-  serverVersion: string,
-  negotiatedProtocol: string,
-): void {
-  const stale = serverVersion !== "" && isBelowVersion(serverVersion, MIN_GORTEX_VERSION);
-  const protocolSkew = negotiatedProtocol !== "" && negotiatedProtocol !== PROTOCOL_VERSION;
-  if (!stale && !protocolSkew) return;
-
-  const installed = serverVersion === "" ? "an unreported version" : `gortex ${serverVersion}`;
-  const user = stale
-    ? `${installed} is older than ${MIN_GORTEX_VERSION}, which this extension needs. ` +
-      `Graph tools and read discipline may be missing or wrong. Run \`gortex upgrade\`.`
-    : `${installed} answered the handshake with MCP protocol ${negotiatedProtocol}, ` +
-      `not the ${PROTOCOL_VERSION} this extension speaks. Tool calls may fail. ` +
-      `Run \`gortex upgrade\`.`;
-
-  setVersionWarning(
-    stale
-      ? `[Gortex] the daemon is ${installed}, older than the ${MIN_GORTEX_VERSION} this ` +
-        `extension targets. A graph tool may be missing or behave unexpectedly. If one ` +
-        `does, tell the user to run \`gortex upgrade\`.`
-      : `[Gortex] the daemon negotiated MCP protocol ${negotiatedProtocol} instead of ` +
-        `${PROTOCOL_VERSION}. A graph tool call may fail. If one does, tell the user to ` +
-        `run \`gortex upgrade\`.`,
+function reportVersionSkew(ctx: ExtensionContext | undefined, serverVersion: string): string {
+  if (serverVersion === "" || !isBelowVersion(serverVersion, MIN_GORTEX_VERSION)) return "";
+  notifyUser(
+    ctx,
+    `gortex ${serverVersion} is older than ${MIN_GORTEX_VERSION}, which this extension needs. ` +
+      `Graph tools and read discipline may be missing or wrong. Run \`gortex upgrade\`.`,
   );
-
-  notifyUser(ctx, user);
+  return (
+    `[Gortex] the daemon is gortex ${serverVersion}, older than the ${MIN_GORTEX_VERSION} this ` +
+    `extension targets. A graph tool may be missing or behave unexpectedly. If one ` +
+    `does, tell the user to run \`gortex upgrade\`.`
+  );
 }
+
+const UNAVAILABLE = "[Gortex] graph tools are unavailable this session";
+
+const NO_MCP_API =
+  `${UNAVAILABLE}: this Pi has no built-in MCP, which the extension needs (Pi 1.0 or ` +
+  `newer). Use Pi's own tools, and tell the user to upgrade Pi for graph tools.`;
+
+const MCP_NOT_LOADED =
+  `${UNAVAILABLE}: Pi's MCP support is not loaded (for example \`--no-mcp\`, or ` +
+  `\`--no-extensions\` without \`-e builtin:mcp\`). Use Pi's own tools. If the user wants ` +
+  `graph tools, tell them to start Pi with MCP enabled.`;
+
+const binaryMissing = (bin: string): string =>
+  `${UNAVAILABLE}: the gortex binary (\`${bin}\`) was not found. Use Pi's own tools, and ` +
+  `tell the user to install Gortex or set GORTEX_BIN, then run /reload.`;
+
+const refused = (reason: string): string =>
+  `${UNAVAILABLE}: Pi refused the gortex MCP server (${reason}). Use Pi's own tools, and ` +
+  `tell the user why and to run /reload once it is fixed.`;
 
 /**
  * A warning for the user only. A Pi build without a UI (print/JSON mode) or
@@ -149,16 +132,12 @@ export interface GortexExtensionOptions {
   config?: GortexConfig;
   /** resolveConfig() seams; `cwd` stands in for the process cwd until a session supplies one. */
   resolve?: ResolveConfigOptions;
-  /** Process seam for spawn/execFileSync. */
+  /** Process seam for the hook. */
   deps?: ProcessDeps;
   /** Readiness cap override. */
   readyWaitMs?: number;
   /** Override for the wait on Pi's built-in MCP connecting the gortex server. */
-  nativeReadyWaitMs?: number;
-  /** tools/call timeout override for the extension's own client. */
-  callTimeoutMs?: number;
-  /** Frame size cap override for the extension's own client. */
-  maxFrameBytes?: number;
+  toolsReadyWaitMs?: number;
 }
 
 export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensionOptions = {}): void {
@@ -170,33 +149,23 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
   let config = configFor();
   const deps = options.deps ?? nodeProcessDeps;
   const readyWaitMs = options.readyWaitMs ?? READY_WAIT_MS;
-  const nativeReadyWaitMs = options.nativeReadyWaitMs ?? NATIVE_READY_WAIT_MS;
+  const toolsReadyWaitMs = options.toolsReadyWaitMs ?? TOOLS_READY_WAIT_MS;
 
-  // On a Pi with built-in MCP, Pi owns the tool channel: it spawns `gortex mcp`
-  // (which starts the daemon itself), registers the tools and renders them.
-  // A binary that does not resolve, or a registration Pi refuses, falls back to
-  // the extension's own client, which reports its failure to the model.
-  // Registered on session_start only, once the session's config is known: Pi
-  // reads a registration made before its own session_start handler, and
-  // connects one made after it.
-  let nativeRefusal = "";
-  let native = false;
-  let registered: GortexConfig | null = null;
-  function registerNative(connector: boolean): void {
-    if (native) unregisterNativeServer(pi);
-    native = false;
-    registered = config;
-    nativeRefusal = "";
-    if (!connector || !config.nativeMcp || !supportsNativeMcp(pi) || !binaryResolves(config.bin)) return;
-    nativeRefusal = registerNativeServer(pi, config);
-    native = nativeRefusal === "";
-  }
-
-  // Re-registering an unchanged server would make Pi reconnect it.
-  const channelChanged = (): boolean =>
-    registered === null ||
-    registered.nativeMcp !== config.nativeMcp ||
-    registered.toolsPreset !== config.toolsPreset;
+  // Pi owns the tool channel: it spawns `gortex mcp` (which starts the daemon
+  // itself), registers the tools and renders them. Registered on session_start,
+  // once the session's config is known: Pi reads a registration made before its
+  // own session_start handler, and connects one made after it. Every session,
+  // reload included, builds a fresh instance, so this runs once per instance.
+  //
+  // Whether gortex tools may still appear: the server is registered, or Pi
+  // refused it because another source already supplies one.
+  let toolsExpected = false;
+  // Why Pi refused the registration, reported only if no tools appear.
+  let refusal = "";
+  // Why this session cannot have graph tools, told to the model on the first turn.
+  let unavailable = "";
+  // Set once the first turn has waited for the tools.
+  let toolsSettled = false;
 
   // Latched for the whole session once the first turn has run the
   // session_start hook, whether or not it produced anything to inject.
@@ -206,124 +175,55 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
   let briefing = "";
   let briefingCompacted = false;
 
-  // Settles when the current session_start handler is done: bridge up and
-  // tools registered, or the handshake failed. Never rejects.
-  //
-  // Armed at factory time, because every session builds a fresh instance before
-  // its session_start fires, so an instance can be asked for a turn before its
-  // own handler has run. Every path that constructs an instance goes on to emit
+  // Settles once session_start has run on this instance. Armed at factory
+  // time, because every session builds a fresh instance before its
+  // session_start fires, so an instance can be asked for a turn before its own
+  // handler has run. Every path that constructs an instance goes on to emit
   // session_start, so the wait ends.
-  let sessionReady!: Promise<void>;
-  let settleSessionReady: () => void = () => {};
-  let sessionReadyPending = false;
+  let markStarted!: () => void;
+  const sessionStarted = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
 
-  function armSessionReady(): void {
-    if (sessionReadyPending) return; // keep the promise parked waiters hold
-    sessionReadyPending = true;
-    sessionReady = new Promise<void>((resolve) => {
-      settleSessionReady = () => {
-        sessionReadyPending = false;
-        resolve();
-      };
-    });
-  }
-  armSessionReady();
-
-  // Resolves true when session_start finished, false when the cap expired
-  // first. The caller has to tell those apart, since a cap expiry leaves
-  // bridgeError empty.
+  // Resolves true once session_start has run, false when the cap expired first.
   function waitForSession(ms: number): Promise<boolean> {
-    const ready = sessionReady;
     return new Promise<boolean>((resolve) => {
-      let settled = false;
-      const done = (ok: boolean) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve(ok);
-      };
-      const timer = setTimeout(() => done(false), ms);
+      const timer = setTimeout(() => resolve(false), ms);
       (timer as { unref?: () => void })?.unref?.();
-      ready.then(() => done(true), () => done(true));
+      void sessionStarted.then(() => {
+        clearTimeout(timer);
+        resolve(true);
+      });
     });
   }
 
-  // Pi resets the session's tool registry on every session_start, so
-  // (re)register here. Clear the name guard first, since it persists across
-  // sessions and would otherwise suppress re-registration. The previous
-  // session's bridge child (if any) is stopped before a fresh handshake.
-  pi.on("session_start", async (_event, ctx) => {
-    startupHookRan = false;
-    briefing = "";
-    briefingCompacted = false;
-    setBridgeError("");
-    setVersionWarning("");
-    armSessionReady(); // no-op when a turn is already parked on this session
-    const settle = settleSessionReady; // this invocation's resolver
+  pi.on("session_start", (_event, ctx) => {
     try {
-      await startSession(ctx);
+      startSession(ctx);
     } finally {
-      settle();
+      markStarted();
     }
   });
 
-  // Stops the live bridge, if any, and clears the slot. Shared by
-  // session_start and session_shutdown so both paths stay in sync.
-  function stopBridge(): void {
-    clearSyncTimer();
-    const previous = getClient();
-    if (previous) {
-      previous.stop();
-      setClient(null);
-    }
-  }
-
-  // startSession holds the body of session_start so the readiness promise
-  // above settles on every exit path, early returns included.
-  async function startSession(ctx?: ExtensionContext): Promise<void> {
+  // Synchronous, so session_start has no suspension point another session
+  // could overlap.
+  function startSession(ctx?: ExtensionContext): void {
     config = configFor(ctx?.cwd);
-    const connector = mcpConnectorLoaded(pi);
-    if (channelChanged()) registerNative(connector);
-    if (native && !connector) {
-      unregisterNativeServer(pi);
-      native = false;
+    if (!supportsMcp(pi)) {
+      unavailable = NO_MCP_API;
+      return;
     }
-    if (native) return;
-    if (nativeRefusal) notifyUser(ctx, `Pi refused the gortex MCP server (${nativeRefusal}), so the extension runs its own client.`);
-    ensureDaemon(config.bin, deps);
-    gortexToolNames.clear();
-    withdrawnToolNames.clear();
-    stopBridge();
-    const c = new MCPStdioClient({
-      bin: config.bin,
-      toolsPreset: config.toolsPreset,
-      cwd: ctx?.cwd,
-      deps,
-      callTimeoutMs: options.callTimeoutMs,
-      maxFrameBytes: options.maxFrameBytes,
-    });
-    // Claim the slot before the first await: an overlapping
-    // session_start (rapid /new or /reload) then sees and stops THIS
-    // bridge instead of leaking its child mid-handshake.
-    setClient(c);
-    try {
-      await c.start();
-      if (getClient() !== c) return; // superseded while handshaking
-      reportVersionSkew(ctx, c.serverVersion, c.negotiatedProtocol);
-      c.onToolsListChanged = () => {
-        scheduleSyncTools(pi);
-      };
-      await registerGortexTools(pi);
-    } catch (err) {
-      // daemon unreachable / binary missing / handshake or tools/list
-      // failure: no graph tools this session; /reload (or the next
-      // session_start) retries.
-      c.stop();
-      if (getClient() === c) {
-        setClient(null);
-        setBridgeError(err instanceof Error ? err.message : String(err));
-      }
+    // Checked before registering, so Pi never reports a server nothing connects.
+    if (!mcpConnectorLoaded(pi)) {
+      unavailable = MCP_NOT_LOADED;
+      return;
     }
+    if (!binaryResolves(config.bin)) {
+      unavailable = binaryMissing(config.bin);
+      return;
+    }
+    refusal = registerServer(pi, config);
+    toolsExpected = true;
   }
 
   pi.on("session_compact", () => {
@@ -341,42 +241,36 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
       return gortexMessage(briefing, true);
     }
     startupHookRan = true; // before the first await, so a second turn can't race in
-    // Pi awaits each listener, so this holds the turn until the tools are
-    // registered and bridgeError reflects the handshake (or the cap expires).
-    // session_start settles `native` first: it falls back when nothing connects MCP.
-    const sessionDone = await waitForSession(readyWaitMs);
-    const ready = native ? await waitForNativeTools(pi, nativeReadyWaitMs) : sessionDone;
+    // Pi awaits each listener, so this holds the turn until session_start has
+    // run and Pi has registered the gortex tools (or a cap expires).
+    const started = await waitForSession(readyWaitMs);
+    const ready = started && toolsExpected ? await waitForGortexTools(pi, toolsReadyWaitMs) : started;
+    toolsSettled = true;
     const decision = callHook(config.hookArgv, deps, {
       event: "session_start",
       cwd: ctx?.cwd ?? process.cwd(),
     });
-    // Pi's MCP keeps the handshake to itself, so the version comes from the briefing.
-    if (native && decision.orientation) {
-      reportVersionSkew(ctx, daemonVersionFromBriefing(decision.orientation), "");
-    }
     const parts: string[] = [];
-    const bridgeError = getBridgeError();
-    if (bridgeError) {
-      parts.push(
-        `[Gortex] graph tools are unavailable this session (${bridgeError}). ` +
-        `Tell the user to run /reload to retry the connection.`,
-      );
-      setBridgeError("");
+    if (unavailable) {
+      // Another source of a `gortex` server, such as Pi's mcp.json, may still
+      // supply the tools.
+      if (!gortexToolsReady(pi)) parts.push(unavailable);
+    } else if (refusal && !ready) {
+      parts.push(refused(refusal));
+      notifyUser(ctx, `Pi refused the gortex MCP server (${refusal}); graph tools are unavailable this session.`);
     } else if (!ready) {
-      // Cap expired mid-handshake: bridgeError is still empty, and this is the
-      // only turn that reports it: startupHookRan latches above, so a
-      // handshake that fails after the cap never reaches the branch above.
+      // The only turn that reports it: startupHookRan latches above.
       parts.push(
         `[Gortex] graph tools were still registering when this turn began, so a tool ` +
         `named below may not be callable yet. If one is missing, say so and tell the ` +
         `user to retry, or to run /reload if it stays missing. Don't fall back to ` +
-        `native tools.`,
+        `Pi's own tools.`,
       );
     }
-    const versionWarning = getVersionWarning();
-    if (versionWarning) {
-      parts.push(versionWarning);
-      setVersionWarning("");
+    // Pi's MCP keeps the handshake to itself, so the version comes from the briefing.
+    if (decision.orientation) {
+      const versionWarning = reportVersionSkew(ctx, daemonVersionFromBriefing(decision.orientation));
+      if (versionWarning) parts.push(versionWarning);
     }
     let briefed = false;
     if (decision.orientation) {
@@ -389,19 +283,14 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
     return gortexMessage(parts.join("\n\n"), briefed);
   });
 
-  // Never let the bridge child outlive the session.
-  pi.on("session_shutdown", async () => {
-    stopBridge();
-  });
-
   // Enforcement: every non-Gortex tool call is checked against the Go hook.
   const enforceReadDiscipline = async (event: ToolCallEvent, ctx: ExtensionContext): Promise<ToolCallEventResult | void> => {
     const piName: string = (event as { toolName?: string })?.toolName ?? "";
     const piInput: Record<string, unknown> = (event?.input as Record<string, unknown>) ?? {};
-    const isGortexTool = native ? isNativeGortexTool(piName) : gortexToolNames.has(piName);
+    const gortexCall = isGortexTool(piName);
 
     // A graph tool keeps its own name: Gortex's `read` is no Pi `read`.
-    const norm = isGortexTool
+    const norm = gortexCall
       ? { tool_name: bareToolName(piName), tool_input: piInput }
       : normalizeToolCall(piName, piInput);
     const decision = callHook(config.hookArgv, deps, {
@@ -410,7 +299,7 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
       tool_input: norm.tool_input,
       cwd: ctx?.cwd ?? process.cwd(),
       session_id: (ctx as { sessionManager?: { sessionId?: string } })?.sessionManager?.sessionId ?? "",
-      is_gortex_tool: isGortexTool,
+      is_gortex_tool: gortexCall,
     });
 
     if (decision.block) {
@@ -429,18 +318,21 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
     }
     return;
   };
+  // Without graph tools, read discipline would block Pi's tools with nothing to
+  // use instead. Until the first turn has waited for them, expected ones count.
+  const graphToolsPossible = (): boolean =>
+    gortexToolsReady(pi) || (!toolsSettled && toolsExpected);
   // Registered unconditionally, since a session's own sidecar can turn enforcement on.
-  pi.on("tool_call", (event, ctx) => (config.enforce ? enforceReadDiscipline(event, ctx) : undefined));
+  pi.on("tool_call", (event, ctx) =>
+    config.enforce && graphToolsPossible() ? enforceReadDiscipline(event, ctx) : undefined,
+  );
 
-  // After enforcement, so a blocked call is never snapshotted. Shell calls are
-  // tracked on both channels; edits are snapshotted on Pi's built-in MCP only.
-  watchNativeEdits(pi, () => native);
-  if (supportsNativeMcp(pi)) {
-    // Pi < 1.0.1 has no tool renderers; the diffs are still stored.
-    try {
-      (pi as Partial<Pick<ExtensionAPI, "registerToolRenderer">>).registerToolRenderer?.(nativeRenderers);
-    } catch {
-      // drawing diffs is optional
-    }
+  // After enforcement, so a blocked call is never snapshotted.
+  watchEdits(pi);
+  // Pi < 1.0.1 has no tool renderers; the diffs are still stored.
+  try {
+    (pi as Partial<Pick<ExtensionAPI, "registerToolRenderer">>).registerToolRenderer?.(gortexRenderers);
+  } catch {
+    // drawing diffs is optional
   }
 }

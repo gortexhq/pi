@@ -1,9 +1,8 @@
 // Loads the extension factory under test, which the harness then hands to
 // Pi's own loader as an inline extension. jiti runs with moduleCache:false,
 // so every load re-evaluates the module graph the way Pi's /reload
-// re-imports the extension (module-level state in state.ts resets); the
-// memoized factory keeps one shared module state per generation, because a
-// /new must see the previous invocation's bridge in order to stop it.
+// re-imports the extension (module-level state resets); the memoized factory
+// keeps one shared module state per generation, as a /new would.
 
 import path from "node:path";
 import { createJiti } from "jiti";

@@ -1,76 +1,79 @@
-// The readiness barrier: a turn that arrives before the gortex tools are
-// registered is held until they are, and the orientation is injected once.
+// The readiness barrier: a turn that arrives before session_start has run, or
+// before Pi has registered the gortex tools, is held until then, and the
+// orientation is injected once, and again only after a compaction drops it.
 //
 // Why this suite exists: Pi accepts a prompt before session_start has run, so
 // without the barrier the first turn of a session finds no graph tools and
-// falls back to native reads, which is the one failure this extension exists to
+// falls back to Pi's own reads, which is the one failure this extension exists to
 // prevent. The hold leaves no trace in the output, so only a suite driving the
 // real lifecycle can show it happening.
 //
 // Driven through Pi's own ExtensionRunner, so `emit()`'s sequential-await
 // semantics, the property the barrier rests on, are the real ones.
 
-import { describe, it, before } from "node:test";
+import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 
-import { loadFactory } from "./support/subject.ts";
-import { createHarness } from "./support/runner.ts";
-import type { ContextMessage, Harness } from "./support/runner.ts";
-import { control, resetInitializeAttempts } from "./support/child-process-mock.ts";
-import { ORIENTATION, TOOLS, delay, options } from "./support/fixtures.ts";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-describe("a turn arriving mid-handshake", () => {
+import { loadFactory } from "./support/subject.ts";
+import type { Factory } from "./support/subject.ts";
+import { assertNoRunnerErrors, createHarness } from "./support/runner.ts";
+import type { ContextMessage, Harness } from "./support/runner.ts";
+import { control } from "./support/hook-mock.ts";
+import { ORIENTATION, delay, options, stubTool, withConnectedTools, withMcpConnector } from "./support/fixtures.ts";
+
+after(assertNoRunnerErrors);
+
+/** A session whose gortex tools are already registered, so no turn waits on them. */
+async function connected(generation: number, harnessOptions = {}): Promise<Harness> {
+  return createHarness(withMcpConnector(withConnectedTools(await loadFactory(generation))), options(), harnessOptions);
+}
+
+describe("a turn arriving before Pi registers the gortex tools", () => {
   let harness: Harness;
-  let toolsAtRelease: number;
+  let parkedUntilTools: boolean;
   let turn1: ContextMessage[];
   let turn2: ContextMessage[];
-  let turn3: ContextMessage[];
   let seenLater: ContextMessage[];
 
   before(async () => {
-    resetInitializeAttempts();
-    control.reset({
-      handshakeDelayMs: 300,
-      toolsListDelayMs: 300,
-      tools: TOOLS,
-      hookDecision: { orientation: ORIENTATION },
+    control.reset({ hookDecision: { orientation: ORIENTATION } });
+    let api!: ExtensionAPI;
+    const capture: Factory = (pi, opts) => {
+      api = pi;
+      return withMcpConnector(gortex)(pi, opts);
+    };
+    const gortex = await loadFactory(0);
+    harness = await createHarness(capture, options({ toolsReadyWaitMs: 60_000 }));
+    await harness.sessionStart();
+
+    let released = false;
+    const turn = harness.turn().then(() => {
+      released = true;
     });
-
-    harness = await createHarness(await loadFactory(0), options());
-
-    // Nothing awaits this, exactly how Pi reaches before_agent_start at startup.
-    const started = harness.sessionStart();
-
-    await harness.turn();
-    toolsAtRelease = harness.tools().length;
-    await started;
+    // Only the tool appearing can release it: the wait is a minute long.
+    await delay(200);
+    parkedUntilTools = !released;
+    api.registerTool(stubTool("search"));
+    await turn;
 
     turn1 = await harness.context();
-    turn2 = await harness.context();
     await harness.turn();
-    turn3 = await harness.context();
+    turn2 = await harness.context();
     seenLater = harness.modelContext();
   });
 
-  it("is held for the whole handshake", () => {
-    assert.equal(toolsAtRelease, 3, "the turn was released before the tools registered");
+  it("is held until the tools appear", () => {
+    assert.ok(parkedUntilTools, "the turn was released before the tools registered");
   });
 
-  it("finds the tools live at the first LLM call", () => {
-    assert.equal(harness.tools().length, 3);
-  });
-
-  it("carries the orientation on the first context push", () => {
-    assert.equal(turn1.length, 1);
-    assert.ok(turn1[0]!.content.includes(ORIENTATION));
-  });
-
-  it("adds it only once", () => {
-    assert.equal(turn2.length, 0);
+  it("carries the orientation alone on the first context push", () => {
+    assert.deepEqual(turn1, [{ role: "user", content: ORIENTATION }]);
   });
 
   it("injects nothing on a second before_agent_start", () => {
-    assert.equal(turn3.length, 0);
+    assert.equal(turn2.length, 0);
   });
 
   it("keeps it in front of the model on later LLM calls", () => {
@@ -85,6 +88,47 @@ describe("a turn arriving mid-handshake", () => {
   });
 });
 
+describe("a session_start that never comes", () => {
+  let harness: Harness;
+  let turn1: ContextMessage[];
+  let turn2: ContextMessage[];
+
+  before(async () => {
+    control.reset({ hookDecision: { orientation: ORIENTATION } });
+    harness = await createHarness(withMcpConnector(await loadFactory(1)), options({ readyWaitMs: 20 }));
+    await harness.turn();
+    turn1 = await harness.context();
+    await harness.turn();
+    turn2 = await harness.context();
+  });
+
+  it("releases the turn at the cap and says the tools may not be callable", () => {
+    assert.equal(turn1.length, 1);
+    assert.match(turn1[0]!.content, /still registering/);
+    assert.ok(turn1[0]!.content.includes(ORIENTATION));
+  });
+
+  it("says so only once", () => {
+    assert.equal(turn2.length, 0);
+  });
+
+  // Why: a registration that lands after the turn gave up waiting may never
+  // connect, and read discipline would then block Pi's tools with nothing to
+  // use instead.
+  it("lets Pi's own tools through when session_start lands late and no tools connect", async () => {
+    await harness.sessionStart();
+    assert.equal(harness.mcpServers().length, 1);
+    control.hookDecision = { block: true, reason: "use graph tools" };
+    const calls = control.hookCalls.length;
+    assert.equal(await harness.toolCall("read", { path: "a.go" }), undefined);
+    assert.equal(control.hookCalls.length, calls);
+  });
+
+  it("raises no extension errors", () => {
+    assert.deepEqual(harness.errors, []);
+  });
+});
+
 describe("a prompt submitted in the /reload gap", () => {
   let first: Harness;
   let second: Harness;
@@ -94,22 +138,16 @@ describe("a prompt submitted in the /reload gap", () => {
   let released: boolean;
 
   before(async () => {
-    resetInitializeAttempts();
-    control.reset({
-      handshakeDelayMs: 150,
-      toolsListDelayMs: 0,
-      tools: TOOLS,
-      hookDecision: { orientation: ORIENTATION },
-    });
+    control.reset({ hookDecision: { orientation: ORIENTATION } });
 
-    first = await createHarness(await loadFactory(1), options());
+    first = await connected(2);
     await first.sessionStart();
     await first.turn();
     injected1 = await first.context();
 
     // /reload: the module is re-imported and the new instance exists before
     // its own session_start fires.
-    second = await createHarness(await loadFactory(2), options());
+    second = await connected(3);
 
     released = false;
     const turn = second.turn().then(() => {
@@ -117,13 +155,12 @@ describe("a prompt submitted in the /reload gap", () => {
     });
 
     // Nothing has emitted session_start on the second instance yet, so the
-    // turn parks regardless of the handshake latency.
+    // turn parks however long this waits.
     await delay(100);
     parkedBeforeSessionStart = !released;
 
-    const started = second.sessionStart("reload");
+    await second.sessionStart("reload");
     await turn;
-    await started;
 
     injected2 = await second.context();
   });
@@ -140,13 +177,17 @@ describe("a prompt submitted in the /reload gap", () => {
     assert.ok(released);
   });
 
-  it("gives session 2 its own tools", () => {
-    assert.equal(second.tools().length, 3);
+  it("registers the server for session 2", () => {
+    assert.equal(second.mcpServers().length, 1);
   });
 
   it("re-injects the orientation for session 2", () => {
-    assert.equal(injected2.length, 1);
-    assert.ok(injected2[0]!.content.includes(ORIENTATION));
+    assert.deepEqual(injected2, [{ role: "user", content: ORIENTATION }]);
+  });
+
+  it("raises no extension errors", () => {
+    assert.deepEqual(first.errors, []);
+    assert.deepEqual(second.errors, []);
   });
 });
 
@@ -157,10 +198,9 @@ describe("a healthy session whose hook returns nothing to inject", () => {
   let injected: ContextMessage[];
 
   before(async () => {
-    resetInitializeAttempts();
-    control.reset({ tools: TOOLS, hookDecision: {} });
+    control.reset({ hookDecision: {} });
 
-    harness = await createHarness(await loadFactory(3), options());
+    harness = await connected(4);
     await harness.sessionStart();
     await harness.turn();
     injected = await harness.context();
@@ -168,8 +208,7 @@ describe("a healthy session whose hook returns nothing to inject", () => {
     await harness.turn();
   });
 
-  it("registers the aliased tools, so nothing reaches the orientation", () => {
-    assert.ok(harness.tools().includes("gortex_read"));
+  it("injects nothing", () => {
     assert.equal(injected.length, 0);
   });
 
@@ -187,10 +226,9 @@ describe("a compaction that summarises the briefing away", () => {
   let afterThat: ContextMessage[];
 
   before(async () => {
-    resetInitializeAttempts();
-    control.reset({ tools: TOOLS, hookDecision: { orientation: ORIENTATION } });
+    control.reset({ hookDecision: { orientation: ORIENTATION } });
 
-    harness = await createHarness(await loadFactory(4), options());
+    harness = await connected(5);
     await harness.sessionStart();
     await harness.turn();
     await harness.context();
@@ -223,10 +261,9 @@ describe("a compaction that keeps the briefing", () => {
   let injected: ContextMessage[];
 
   before(async () => {
-    resetInitializeAttempts();
-    control.reset({ tools: TOOLS, hookDecision: { orientation: ORIENTATION } });
+    control.reset({ hookDecision: { orientation: ORIENTATION } });
 
-    harness = await createHarness(await loadFactory(5), options());
+    harness = await connected(6);
     await harness.sessionStart();
     await harness.turn();
     await harness.context();
@@ -248,15 +285,14 @@ describe("a reloaded session that already holds the briefing", () => {
   let injected: ContextMessage[];
 
   before(async () => {
-    resetInitializeAttempts();
-    control.reset({ tools: TOOLS, hookDecision: { orientation: ORIENTATION } });
+    control.reset({ hookDecision: { orientation: ORIENTATION } });
 
-    const first = await createHarness(await loadFactory(6), options());
+    const first = await connected(7);
     await first.sessionStart();
     await first.turn();
     await first.sessionShutdown("reload");
 
-    reloaded = await createHarness(await loadFactory(7), options(), { session: first.session });
+    reloaded = await connected(8, { session: first.session });
     await reloaded.sessionStart("reload");
     await reloaded.turn();
     injected = await reloaded.context();
