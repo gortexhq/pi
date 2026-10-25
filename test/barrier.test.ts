@@ -192,7 +192,7 @@ describe("a prompt submitted in the /reload gap", () => {
 });
 
 // The hook carries a session_start event, so it must be shelled once per
-// session. It is execFileSync, which blocks Pi's event loop while it runs.
+// session.
 describe("a healthy session whose hook returns nothing to inject", () => {
   let harness: Harness;
   let injected: ContextMessage[];

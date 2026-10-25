@@ -3,37 +3,64 @@
 // involved. The control object below is the only steering surface the
 // scenarios need.
 
-import type { ExecFileSyncOpts, ProcessDeps } from "../../src/runtime.ts";
+import type { ExecFileOpts, ProcessDeps } from "../../src/runtime.ts";
 
 export interface HookCall {
   bin: string;
   args: string[];
   input: string | undefined;
-  opts: ExecFileSyncOpts | undefined;
+  opts: ExecFileOpts | undefined;
 }
 
 export interface Control {
-  hookDecision: Record<string, unknown>;
+  hookDecision: unknown;
+  /** Written back verbatim instead of the JSON of hookDecision. */
+  hookOutput: string | undefined;
+  /** While set, every hook call waits for it, or rejects once its signal aborts. */
+  hookGate: Promise<void> | undefined;
   hookCalls: HookCall[];
   reset(overrides?: Partial<Control>): void;
 }
 
 export const control: Control = {
   // What the Go hook "writes back" for every callHook() envelope.
-  hookDecision: {} as Record<string, unknown>,
+  hookDecision: {},
+  hookOutput: undefined,
+  hookGate: undefined,
   // Observations.
   hookCalls: [] as HookCall[],
 
   reset(overrides: Partial<Control> = {}) {
     this.hookDecision = {};
+    this.hookOutput = undefined;
+    this.hookGate = undefined;
     this.hookCalls = [];
     Object.assign(this, overrides);
   },
 };
 
-export function execFileSync(bin: string, args: string[] = [], opts?: ExecFileSyncOpts): string {
-  control.hookCalls.push({ bin, args: [...args], input: opts?.input, opts });
-  return JSON.stringify(control.hookDecision);
+/** A gate for control.hookGate and the function that opens it. */
+export function gate(): { promise: Promise<void>; open: () => void } {
+  let open!: () => void;
+  const promise = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { promise, open };
 }
 
-export const mockDeps: ProcessDeps = { execFileSync };
+export async function execFile(bin: string, args: string[] = [], opts?: ExecFileOpts): Promise<string> {
+  control.hookCalls.push({ bin, args: [...args], input: opts?.input, opts });
+  const held = control.hookGate;
+  if (held) {
+    const signal = opts?.signal;
+    await new Promise<void>((resolve, reject) => {
+      const abort = () => reject(new Error("aborted"));
+      if (signal?.aborted) return abort();
+      signal?.addEventListener("abort", abort, { once: true });
+      void held.then(resolve);
+    });
+  }
+  return control.hookOutput ?? JSON.stringify(control.hookDecision);
+}
+
+export const mockDeps: ProcessDeps = { execFile };

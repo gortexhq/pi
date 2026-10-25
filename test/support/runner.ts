@@ -83,6 +83,8 @@ export interface Harness {
   compact(keepFrom?: string | null): Promise<unknown>;
   session: SessionManager;
   toolCall(toolName: string, input: Record<string, unknown>): Promise<ToolCallEventResult | undefined>;
+  /** Aborts the signal handlers see on ctx.signal, as Esc does during a turn. */
+  abort(): void;
   tools(): string[];
   /** The files Pi loaded this extension from. */
   extensionPaths(): string[];
@@ -110,11 +112,11 @@ function extensionActions(sent: unknown[], runner: () => ExtensionRunner): Exten
   return partial as ExtensionActions;
 }
 
-function extensionContextActions(): ExtensionContextActions {
+function extensionContextActions(signal: AbortSignal): ExtensionContextActions {
   const partial: Partial<ExtensionContextActions> = {
     isIdle: () => true,
     isProjectTrusted: () => true,
-    getSignal: () => undefined,
+    getSignal: () => signal,
   };
   return partial as ExtensionContextActions;
 }
@@ -218,7 +220,8 @@ function buildHarness(
     new ModelRegistry(undefined as never),
   );
   runner.onError((err) => errors.push(err));
-  runner.bindCore(extensionActions(sent, () => runner), extensionContextActions());
+  const controller = new AbortController();
+  runner.bindCore(extensionActions(sent, () => runner), extensionContextActions(controller.signal));
 
   // Without a UI context the runner reports hasUI false, so the extension's
   // user-facing warnings would be skipped rather than asserted on.
@@ -277,6 +280,9 @@ function buildHarness(
     },
     toolCall(toolName, input) {
       return runner.emitToolCall({ type: "tool_call", toolName, input } as Parameters<ExtensionRunner["emitToolCall"]>[0]);
+    },
+    abort() {
+      controller.abort();
     },
     tools() {
       return runner.getAllRegisteredTools().map((t) => t.definition.name);

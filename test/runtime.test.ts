@@ -5,8 +5,8 @@
 // Why this suite exists: Node refuses to spawn batch files directly, and the
 // hook bridge swallows the error, so a shim install would lose the briefing
 // and read discipline with nothing reporting it. Resolution and escaping are
-// pure and run everywhere. Spawning a real batch file runs on Windows only,
-// which CI covers.
+// pure and run everywhere. Spawning a real batch file, and killing the tree
+// under it, runs on Windows only, which CI covers.
 
 import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
@@ -15,6 +15,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { batchCommand, nodeProcessDeps, resolveExecutable } from "../src/runtime.ts";
+
+import { exits, pidFrom } from "./support/fixtures.ts";
 
 const ROOT = mkdtempSync(path.join(tmpdir(), "pi-gortex-runtime-"));
 after(() => rmSync(ROOT, { recursive: true, force: true }));
@@ -69,12 +71,12 @@ describe("batch file invocation", () => {
 describe("spawning a batch file", { skip: process.platform !== "win32" && "Windows only" }, () => {
   const shim = "@echo off\r\necho args %*\r\nset /p input=\r\necho input %input%\r\n";
 
-  it("runs a cmd shim found through PATH", () => {
+  it("runs a cmd shim found through PATH", async () => {
     const dir = dirWith("on-path", { "gortex.cmd": shim });
     const saved = process.env.PATH;
     process.env.PATH = `${dir}${path.delimiter}${saved ?? ""}`;
     try {
-      const out = nodeProcessDeps.execFileSync("gortex", ["hook", "--agent=pi"], { input: '{"event":"x"}\n' });
+      const out = await nodeProcessDeps.execFile("gortex", ["hook", "--agent=pi"], { input: '{"event":"x"}\n' });
       assert.match(out, /args "hook" "--agent=pi"/);
       assert.match(out, /input \{"event":"x"\}/);
     } finally {
@@ -82,9 +84,38 @@ describe("spawning a batch file", { skip: process.platform !== "win32" && "Windo
     }
   });
 
-  it("runs a bat file by a path with spaces and parentheses", () => {
+  it("runs a bat file by a path with spaces and parentheses", async () => {
     const dir = dirWith("Program Files (x86)", { "gortex.bat": shim });
-    const out = nodeProcessDeps.execFileSync(path.join(dir, "gortex.bat"), ["hook"], { input: "{}" });
+    const out = await nodeProcessDeps.execFile(path.join(dir, "gortex.bat"), ["hook"], { input: "{}" });
     assert.match(out, /args "hook"/);
+  });
+
+  // Node would kill cmd.exe alone and leave the gortex under it running.
+  function hangingShim(name: string): { shim: string; pidFile: string } {
+    const dir = dirWith(name, {
+      "hang.js": 'require("node:fs").writeFileSync(process.argv[2], String(process.pid)); setTimeout(() => {}, 60000);',
+    });
+    const pidFile = path.join(dir, "gortex.pid");
+    const shim = path.join(dir, "gortex.cmd");
+    writeFileSync(shim, `@"${process.execPath}" "${path.join(dir, "hang.js")}" "${pidFile}"\r\n`);
+    return { shim, pidFile };
+  }
+
+  it("kills the gortex under cmd.exe when the signal aborts", async () => {
+    const { shim, pidFile } = hangingShim("abort-tree");
+    const controller = new AbortController();
+    const running = nodeProcessDeps.execFile(shim, ["hook"], { signal: controller.signal });
+    const pid = await pidFrom(pidFile);
+    controller.abort();
+    await assert.rejects(running);
+    assert.equal(await exits(pid), true);
+  });
+
+  it("kills the gortex under cmd.exe when it outlives its timeout", async () => {
+    const { shim, pidFile } = hangingShim("timeout-tree");
+    const running = nodeProcessDeps.execFile(shim, ["hook"], { timeout: 3_000 });
+    const pid = await pidFrom(pidFile);
+    await assert.rejects(running);
+    assert.equal(await exits(pid), true);
   });
 });
