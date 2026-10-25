@@ -71,5 +71,8 @@
       "./index.ts"
     ],
     "image": "https://raw.githubusercontent.com/zzet/gortex/main/assets/wall.png"
+  },
+  "overrides": {
+    "undici": "^8.12.3"
   }
 }
