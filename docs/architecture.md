@@ -69,6 +69,10 @@ Every tool call Pi is about to run is forwarded to Gortex's hook with a
 normalized event envelope, and the decision that comes back is applied: block
 the call with a reason, attach non-blocking soft guidance, or do nothing.
 
+The hook runs as a child process off Pi's event loop, so the TUI stays live
+while it decides, and aborting the turn kills it. Soft guidance is appended to
+the result of the call it concerns, so the model reads the two together.
+
 Pi names its tools in its own lowercase vocabulary and shapes their inputs its
 own way, while Gortex's classifier switches on canonical tool names and input
 keys. That translation lives on this side of the bridge, so the Go side keeps
@@ -115,8 +119,8 @@ Fail open, everywhere. A missing binary, a daemon that is down, MCP turned off,
 a refused registration, a malformed configuration file, a hook that errors:
 each costs the session some capability and never takes the session down. When
 graph tools are unavailable the first turn says so and names the remedy; a hook
-error yields an empty decision, so a hiccup never blocks a tool call the user
-asked for.
+that errors, is aborted or answers with anything but a decision yields an
+empty decision, so a hiccup never blocks a tool call the user asked for.
 
 ## Configuration
 

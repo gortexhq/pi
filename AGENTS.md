@@ -25,7 +25,7 @@ runs the suites under type stripping.
 | `src/diff.ts` | Diffs of the files a Gortex edit writes |
 | `src/hook.ts` | Bridge to `gortex hook --agent=pi` |
 | `src/config.ts` | Environment and sidecar resolution |
-| `src/runtime.ts` | Injectable process seam (`execFileSync`) |
+| `src/runtime.ts` | Injectable process seam (`execFile`) |
 | `test/support/` | Harness running the extension under Pi's real runner |
 | `docs/architecture.md` | How the extension works and why |
 | `docs/tests.md` | Rules every test suite follows |

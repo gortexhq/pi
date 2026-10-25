@@ -2,7 +2,7 @@
 // each event is shelled out with an envelope on stdin and the decision read
 // back is applied.
 
-import type { ExecFileSyncOpts, ProcessDeps } from "./runtime.ts";
+import type { ExecFileOpts, ProcessDeps } from "./runtime.ts";
 
 /** The decision shape Go writes back (hooks.BridgeDecision). */
 export interface PiDecision {
@@ -22,8 +22,7 @@ export interface PiEnvelope {
   is_gortex_tool?: boolean;
 }
 
-const HOOK_EXEC_OPTS: ExecFileSyncOpts = {
-  encoding: "utf8",
+const HOOK_EXEC_OPTS: ExecFileOpts = {
   maxBuffer: 16 * 1024 * 1024,
   timeout: 5_000,
   windowsHide: true,
@@ -31,19 +30,24 @@ const HOOK_EXEC_OPTS: ExecFileSyncOpts = {
 
 /**
  * callHook sends a normalized event envelope to `gortex hook --agent=pi` and
- * parses the PiDecision it writes back. Fail-open: any error returns an empty
- * decision so the extension never blocks Pi's flow on a hook hiccup (daemon
- * down, parse error, timeout).
+ * parses the PiDecision it writes back. Fail-open: any error, an aborted
+ * `signal`, or a reply that is not a JSON object returns an empty decision, so
+ * the extension never blocks Pi's flow on a hook hiccup (daemon down, parse
+ * error, timeout).
  */
-export function callHook(argv: string[], deps: ProcessDeps, envelope: PiEnvelope): PiDecision {
+export async function callHook(
+  argv: string[],
+  deps: ProcessDeps,
+  envelope: PiEnvelope,
+  signal?: AbortSignal,
+): Promise<PiDecision> {
   const [bin, ...args] = argv;
   if (!bin) return {};
   try {
-    const out = deps
-      .execFileSync(bin, args, { ...HOOK_EXEC_OPTS, input: JSON.stringify(envelope) })
-      .trim();
+    const out = (await deps.execFile(bin, args, { ...HOOK_EXEC_OPTS, input: JSON.stringify(envelope), signal })).trim();
     if (!out) return {};
-    return JSON.parse(out) as PiDecision;
+    const decision: unknown = JSON.parse(out);
+    return typeof decision === "object" && decision !== null && !Array.isArray(decision) ? (decision as PiDecision) : {};
   } catch {
     return {};
   }
@@ -65,6 +69,7 @@ export const toolNameMap: Record<string, string> = {
   find: "Glob",
   ls: "Glob",
   bash: "Bash",
+  powershell: "Bash",
   edit: "Edit",
   write: "Write",
 };

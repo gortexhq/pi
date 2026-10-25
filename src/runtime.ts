@@ -1,23 +1,24 @@
 // The process seam: everything the extension does to the outside world goes
-// through `execFileSync`, injectable so the suite can double `gortex hook`.
+// through `execFile`, injectable so the suite can double `gortex hook`.
 // The types below describe only what the extension uses, so a double stays a
 // small object.
 
-import { execFileSync as nodeExecFileSync } from "node:child_process";
-import type { ExecFileSyncOptions } from "node:child_process";
+import { execFile as nodeExecFile } from "node:child_process";
+import type { ExecFileOptions } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
 import { extname, join, posix, win32 } from "node:path";
 
-export interface ExecFileSyncOpts {
+export interface ExecFileOpts {
   input?: string;
-  encoding?: "utf8";
   maxBuffer?: number;
   timeout?: number;
   windowsHide?: boolean;
+  signal?: AbortSignal;
 }
 
 export interface ProcessDeps {
-  execFileSync(command: string, args: string[], options?: ExecFileSyncOpts): string;
+  /** Resolves with the child's stdout. Its stderr is collected and dropped, never inherited. */
+  execFile(command: string, args: string[], options?: ExecFileOpts): Promise<string>;
 }
 
 /**
@@ -71,20 +72,62 @@ export function batchCommand(
   return { command: comspec, args: ["/d", "/s", "/c", `"${line}"`] };
 }
 
+function run(command: string, args: string[], options: ExecFileOpts, extra: ExecFileOptions = {}) {
+  const { input, ...rest } = options;
+  let pid: number | undefined;
+  const done = new Promise<string>((resolve, reject) => {
+    const child = nodeExecFile(command, args, { ...rest, ...extra, encoding: "utf8" }, (err, stdout) => {
+      if (err) reject(err);
+      else resolve(stdout);
+    });
+    pid = child.pid;
+    child.stdin?.on("error", () => {});
+    child.stdin?.end(input ?? "");
+  });
+  return { pid, done };
+}
+
+/**
+ * Runs a batch file through cmd.exe and, on timeout or abort, kills the whole
+ * tree. Node would kill cmd.exe alone and leave the gortex under it running.
+ */
+function runBatch(batch: { command: string; args: string[] }, options: ExecFileOpts): Promise<string> {
+  const { timeout, signal, ...rest } = options;
+  const { pid, done } = run(batch.command, batch.args, rest, { windowsVerbatimArguments: true });
+  return new Promise((resolve, reject) => {
+    const settle = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const stop = (reason: Error) => {
+      settle();
+      if (pid !== undefined) nodeExecFile("taskkill", ["/T", "/F", "/PID", String(pid)], { windowsHide: true }, () => {});
+      reject(reason);
+    };
+    const onAbort = () => stop(new Error("aborted"));
+    const timer = timeout ? setTimeout(() => stop(new Error("timed out")), timeout) : undefined;
+    if (signal?.aborted) return onAbort();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    done.then(
+      (out) => {
+        settle();
+        resolve(out);
+      },
+      (err: unknown) => {
+        settle();
+        reject(err);
+      },
+    );
+  });
+}
+
 /** The real implementation, narrowed to the surface above. */
 export const nodeProcessDeps: ProcessDeps = {
-  execFileSync(command, args, options) {
+  execFile(command, args, options = {}) {
     const file = process.platform === "win32" ? resolveExecutable(command) : undefined;
     if (file && /\.(cmd|bat)$/i.test(file)) {
-      const batch = batchCommand(command, args, process.env.ComSpec || process.env.COMSPEC);
-      // Honoured by execFileSync, which hands it to spawnSync, but missing from its type.
-      const verbatim: ExecFileSyncOptions & { windowsVerbatimArguments: boolean } = {
-        ...options,
-        encoding: "utf8",
-        windowsVerbatimArguments: true,
-      };
-      return String(nodeExecFileSync(batch.command, batch.args, verbatim));
+      return runBatch(batchCommand(command, args, process.env.ComSpec || process.env.COMSPEC), options);
     }
-    return String(nodeExecFileSync(command, args, { ...options, encoding: "utf8" }));
+    return run(command, args, options).done;
   },
 };

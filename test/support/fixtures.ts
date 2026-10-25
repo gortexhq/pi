@@ -1,6 +1,8 @@
 // Shared fixtures. The per-suite choreography stays in the test files: for the
 // barrier, when each event fires relative to the others IS the thing under test.
 
+import { readFileSync } from "node:fs";
+
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 import type { GortexConfig } from "../../src/config.ts";
@@ -92,3 +94,30 @@ export async function gortexSession(
 }
 
 export const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** The pid a child wrote to `file`, once it has. */
+export async function pidFrom(file: string): Promise<number> {
+  // A fence against a child that never starts, not a bound under test.
+  for (let i = 0; i < 1000; i++) {
+    const pid = Number(readFileSync(file, { encoding: "utf8", flag: "a+" }));
+    if (pid) return pid;
+    await delay(10);
+  }
+  throw new Error(`no pid in ${file}`);
+}
+
+/**
+ * Whether `pid` exits. Node rejects a killed child's call once it has sent the
+ * kill, before the child has exited, so this waits under a fence.
+ */
+export async function exits(pid: number): Promise<boolean> {
+  const alive = (): boolean => {
+    try {
+      return process.kill(pid, 0);
+    } catch {
+      return false;
+    }
+  };
+  for (let i = 0; i < 500 && alive(); i++) await delay(10);
+  return !alive();
+}

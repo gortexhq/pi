@@ -246,7 +246,7 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
     const started = await waitForSession(readyWaitMs);
     const ready = started && toolsExpected ? await waitForGortexTools(pi, toolsReadyWaitMs) : started;
     toolsSettled = true;
-    const decision = callHook(config.hookArgv, deps, {
+    const decision = await callHook(config.hookArgv, deps, {
       event: "session_start",
       cwd: ctx?.cwd ?? process.cwd(),
     });
@@ -283,6 +283,13 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
     return gortexMessage(parts.join("\n\n"), briefed);
   });
 
+  // Soft guidance waits for its own call's result, so the model reads the two
+  // together. A nested call's result goes to the script that made it, so its
+  // guidance waits for the top-level call's.
+  const guidance = new Map<string, string>();
+  // The top-level call each nested call in flight runs under.
+  const roots = new Map<string, string>();
+
   // Enforcement: every non-Gortex tool call is checked against the Go hook.
   const enforceReadDiscipline = async (event: ToolCallEvent, ctx: ExtensionContext): Promise<ToolCallEventResult | void> => {
     const piName: string = (event as { toolName?: string })?.toolName ?? "";
@@ -293,28 +300,26 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
     const norm = gortexCall
       ? { tool_name: bareToolName(piName), tool_input: piInput }
       : normalizeToolCall(piName, piInput);
-    const decision = callHook(config.hookArgv, deps, {
+    const decision = await callHook(config.hookArgv, deps, {
       event: "tool_call",
       tool_name: norm.tool_name,
       tool_input: norm.tool_input,
       cwd: ctx?.cwd ?? process.cwd(),
       session_id: (ctx as { sessionManager?: { sessionId?: string } })?.sessionManager?.sessionId ?? "",
       is_gortex_tool: gortexCall,
-    });
+    }, ctx?.signal);
 
     if (decision.block) {
       return { block: true, reason: decision.reason ?? "[Gortex] blocked: prefer graph tools." };
     }
-    if (decision.additional_context) {
-      // Soft guidance: surface it without blocking the call.
-      try {
-        pi.sendMessage(
-          { customType: "gortex", content: decision.additional_context, display: true },
-          { deliverAs: "steer" },
-        );
-      } catch {
-        // sendMessage shape can vary across Pi versions; never fatal.
-      }
+    let id = event.toolCallId;
+    if (event.parentToolCallId) {
+      id = roots.get(event.parentToolCallId) ?? event.parentToolCallId;
+      roots.set(event.toolCallId, id);
+    }
+    if (decision.additional_context && id) {
+      const parked = guidance.get(id);
+      guidance.set(id, parked ? `${parked}\n\n${decision.additional_context}` : decision.additional_context);
     }
     return;
   };
@@ -326,6 +331,19 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
   pi.on("tool_call", (event, ctx) =>
     config.enforce && graphToolsPossible() ? enforceReadDiscipline(event, ctx) : undefined,
   );
+
+  pi.on("tool_result", (event) => {
+    const text = guidance.get(event.toolCallId);
+    if (text === undefined) return;
+    guidance.delete(event.toolCallId);
+    // Replacing the content drops structured content that is not returned with it.
+    return { content: [...(event.content ?? []), { type: "text", text }], structuredContent: event.structuredContent };
+  });
+  // Pi emits this after tool_result, and also for a call that never produced one.
+  pi.on("tool_execution_end", (event) => {
+    guidance.delete(event.toolCallId);
+    roots.delete(event.toolCallId);
+  });
 
   // After enforcement, so a blocked call is never snapshotted.
   watchEdits(pi);
