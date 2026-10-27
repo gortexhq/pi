@@ -19,6 +19,7 @@ export interface PiEnvelope {
   tool_input?: Record<string, unknown>;
   cwd?: string;
   session_id?: string;
+  prompt?: string;
   is_gortex_tool?: boolean;
 }
 
