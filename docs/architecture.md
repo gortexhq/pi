@@ -94,6 +94,11 @@ The session briefing is stored once in the session history as a hidden message,
 so every LLM call carries it. It stays out of the system prompt, because a
 change there invalidates prefix prompt caching.
 
+Prompt hints follow the same rule. Each prompt's hints are appended after it
+and never edited or removed later, since changing an earlier message would
+invalidate the cache from that point on every turn. The prompt goes to Gortex
+as typed, before skill expansion, which is the text Claude Code's hook gets.
+
 ## The readiness barrier
 
 Pi arms the prompt's submit handler well before the session hook that registers

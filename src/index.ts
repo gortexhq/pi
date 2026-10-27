@@ -174,6 +174,9 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
   // send it again on the next turn.
   let briefing = "";
   let briefingCompacted = false;
+  // Gortex's symbol hints for the prompt about to run, requested on `input`,
+  // where the text is still the line the user typed.
+  let pendingHints: Promise<string> | undefined;
 
   // Settles once session_start has run on this instance. Armed at factory
   // time, because every session builds a fresh instance before its
@@ -234,11 +237,20 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
   // stored in the session after the prompt, so every later LLM call carries it
   // and the system prompt, which prefix caching keys on, stays untouched.
   pi.on("before_agent_start", async (_event, ctx): Promise<BeforeAgentStartEventResult | void> => {
+    const requested = pendingHints;
+    pendingHints = undefined;
     if (startupHookRan) {
-      if (!briefingCompacted) return;
-      briefingCompacted = false;
-      if (!briefing || briefingInContext(ctx)) return;
-      return gortexMessage(briefing, true);
+      const parts: string[] = [];
+      let briefed = false;
+      if (briefingCompacted) {
+        briefingCompacted = false;
+        briefed = briefing !== "" && !briefingInContext(ctx);
+        if (briefed) parts.push(briefing);
+      }
+      const hints = await promptHints(requested);
+      if (hints) parts.push(hints);
+      if (parts.length === 0) return;
+      return gortexMessage(parts.join("\n\n"), briefed);
     }
     startupHookRan = true; // before the first await, so a second turn can't race in
     // Pi awaits each listener, so this holds the turn until session_start has
@@ -279,9 +291,35 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
       briefed = !briefingInContext(ctx);
       if (briefed) parts.push(decision.orientation);
     }
+    const hints = await promptHints(requested);
+    if (hints) parts.push(hints);
     if (parts.length === 0) return;
     return gortexMessage(parts.join("\n\n"), briefed);
   });
+
+  // Steering and follow-up messages typed mid-run never reach
+  // before_agent_start, so they get no hints. The hook skips slash commands,
+  // which is why the text goes out before skill expansion.
+  pi.on("input", (event, ctx) => {
+    if (event.streamingBehavior) return;
+    pendingHints = (async () => {
+      await waitForSession(readyWaitMs);
+      if (!graphToolsPossible()) return "";
+      const decision = await callHook(config.hookArgv, deps, {
+        event: "prompt",
+        prompt: event.text,
+        cwd: ctx?.cwd ?? process.cwd(),
+        session_id: ctx?.sessionManager?.getSessionId?.() ?? "",
+      });
+      return decision.additional_context ?? "";
+    })();
+  });
+
+  // Hints point at graph tools, so they are dropped when the session has none.
+  async function promptHints(requested: Promise<string> | undefined): Promise<string> {
+    const hints = requested ? await requested : "";
+    return hints && graphToolsPossible() ? hints : "";
+  }
 
   // Soft guidance waits for its own call's result, so the model reads the two
   // together. A nested call's result goes to the script that made it, so its

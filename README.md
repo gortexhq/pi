@@ -27,6 +27,9 @@ and read discipline goes through `gortex hook`.
   behaviour matches every other agent it integrates with.
 - **Briefs the model once per session** with Gortex's orientation for the
   current repository.
+- **Points each prompt at relevant code.** A prompt typed while Pi is idle is
+  sent to Gortex, and the graph symbols it finds relevant ride the turn as a
+  hidden message.
 
 See [docs/architecture.md](docs/architecture.md) for how it works.
 

@@ -14,6 +14,8 @@ export interface HookCall {
 
 export interface Control {
   hookDecision: unknown;
+  /** Per envelope event, in place of hookDecision. */
+  hookDecisions: Record<string, unknown>;
   /** Written back verbatim instead of the JSON of hookDecision. */
   hookOutput: string | undefined;
   /** While set, every hook call waits for it, or rejects once its signal aborts. */
@@ -25,6 +27,7 @@ export interface Control {
 export const control: Control = {
   // What the Go hook "writes back" for every callHook() envelope.
   hookDecision: {},
+  hookDecisions: {},
   hookOutput: undefined,
   hookGate: undefined,
   // Observations.
@@ -32,6 +35,7 @@ export const control: Control = {
 
   reset(overrides: Partial<Control> = {}) {
     this.hookDecision = {};
+    this.hookDecisions = {};
     this.hookOutput = undefined;
     this.hookGate = undefined;
     this.hookCalls = [];
@@ -60,7 +64,9 @@ export async function execFile(bin: string, args: string[] = [], opts?: ExecFile
       void held.then(resolve);
     });
   }
-  return control.hookOutput ?? JSON.stringify(control.hookDecision);
+  const event = (JSON.parse(opts?.input ?? "{}") as { event?: string }).event ?? "";
+  const decision = event in control.hookDecisions ? control.hookDecisions[event] : control.hookDecision;
+  return control.hookOutput ?? JSON.stringify(decision);
 }
 
 export const mockDeps: ProcessDeps = { execFile };

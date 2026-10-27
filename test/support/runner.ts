@@ -75,6 +75,10 @@ export interface Harness {
    * and any message the extension returns in the session, as Pi does.
    */
   turn(prompt?: string): Promise<unknown>;
+  /** input, as Pi emits it for a typed message, mid-run when `streamingBehavior` is set. */
+  input(text: string, streamingBehavior?: "steer" | "followUp"): Promise<unknown>;
+  /** A message typed while idle: input with the raw text, then the turn with the expanded one. */
+  prompt(text: string, expanded?: string): Promise<unknown>;
   /** The messages the extension added since the previous call. */
   context(): Promise<ContextMessage[]>;
   /** The extension's messages among what the next LLM call would see. */
@@ -256,6 +260,13 @@ function buildHarness(
         added.push({ role: "user", content: String(message.content) });
       }
       return result;
+    },
+    input(text, streamingBehavior) {
+      return runner.emitInput(text, undefined, "interactive", streamingBehavior);
+    },
+    async prompt(text, expanded = text) {
+      await this.input(text);
+      return this.turn(expanded);
     },
     async context() {
       const out = added;
