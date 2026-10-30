@@ -3,7 +3,9 @@
 // the hook bridge. See docs/architecture.md for the design.
 
 import type {
+  AgentBeforeSettleEventResult,
   BeforeAgentStartEventResult,
+  BoundaryContextPreview,
   ExtensionAPI,
   ExtensionContext,
   ToolCallEvent,
@@ -13,7 +15,7 @@ import type {
 import { resolveConfig } from "./config.ts";
 import type { GortexConfig, ResolveConfigOptions } from "./config.ts";
 import { watchEdits } from "./diff.ts";
-import { callHook, normalizeToolCall } from "./hook.ts";
+import { STOP_HOOK_TIMEOUT_MS, callHook, normalizeToolCall } from "./hook.ts";
 import {
   MIN_GORTEX_VERSION,
   TOOLS_READY_WAIT_MS,
@@ -28,7 +30,7 @@ import {
   supportsMcp,
   waitForGortexTools,
 } from "./mcp.ts";
-import { gortexRenderers } from "./render.ts";
+import { gortexRenderers, renderPostTask, sanitize } from "./render.ts";
 import { nodeProcessDeps } from "./runtime.ts";
 import type { ProcessDeps } from "./runtime.ts";
 
@@ -124,6 +126,21 @@ function briefingInContext(ctx: ExtensionContext | undefined): boolean {
   } catch {
     return false;
   }
+}
+
+/** Marks the post-task diagnostics, which the user sees too. */
+const POST_TASK_MESSAGE_TYPE = "gortex-post-task";
+
+const sessionIdOf = (ctx: ExtensionContext | undefined): string => ctx?.sessionManager?.getSessionId?.() ?? "";
+
+/** The text of the last assistant message, which Gortex checks for unbacked claims. */
+function lastAssistantText(messages: BoundaryContextPreview["contextMessages"]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message?.role !== "assistant") continue;
+    return message.content.map((c) => (c.type === "text" ? c.text : "")).filter(Boolean).join("\n");
+  }
+  return "";
 }
 
 /** Test seams. Pi itself calls the factory with the `pi` object alone. */
@@ -237,6 +254,7 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
   // stored in the session after the prompt, so every later LLM call carries it
   // and the system prompt, which prefix caching keys on, stays untouched.
   pi.on("before_agent_start", async (_event, ctx): Promise<BeforeAgentStartEventResult | void> => {
+    postTaskContinued = false;
     const requested = pendingHints;
     pendingHints = undefined;
     if (startupHookRan) {
@@ -309,7 +327,7 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
         event: "prompt",
         prompt: event.text,
         cwd: ctx?.cwd ?? process.cwd(),
-        session_id: ctx?.sessionManager?.getSessionId?.() ?? "",
+        session_id: sessionIdOf(ctx),
       });
       return decision.additional_context ?? "";
     })();
@@ -328,8 +346,9 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
   // The top-level call each nested call in flight runs under.
   const roots = new Map<string, string>();
 
-  // Enforcement: every non-Gortex tool call is checked against the Go hook.
-  const enforceReadDiscipline = async (event: ToolCallEvent, ctx: ExtensionContext): Promise<ToolCallEventResult | void> => {
+  // Every tool call goes to the Go hook, which records the files it writes for
+  // the post-task diagnostics and, when enforcing, checks it.
+  const forwardToolCall = (event: ToolCallEvent, ctx: ExtensionContext, recordOnly: boolean) => {
     const piName: string = (event as { toolName?: string })?.toolName ?? "";
     const piInput: Record<string, unknown> = (event?.input as Record<string, unknown>) ?? {};
     const gortexCall = isGortexTool(piName);
@@ -338,14 +357,27 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
     const norm = gortexCall
       ? { tool_name: bareToolName(piName), tool_input: piInput }
       : normalizeToolCall(piName, piInput);
-    const decision = await callHook(config.hookArgv, deps, {
+    return callHook(config.hookArgv, deps, {
       event: "tool_call",
       tool_name: norm.tool_name,
       tool_input: norm.tool_input,
       cwd: ctx?.cwd ?? process.cwd(),
-      session_id: (ctx as { sessionManager?: { sessionId?: string } })?.sessionManager?.sessionId ?? "",
+      session_id: sessionIdOf(ctx),
       is_gortex_tool: gortexCall,
+      ...(recordOnly ? { record_only: true } : {}),
     }, ctx?.signal);
+  };
+
+  // Records still in flight, which the post-task diagnostics wait for.
+  const recording = new Set<Promise<unknown>>();
+  const recordToolCall = (event: ToolCallEvent, ctx: ExtensionContext): void => {
+    const record = forwardToolCall(event, ctx, true);
+    recording.add(record);
+    void record.finally(() => recording.delete(record));
+  };
+
+  const enforceReadDiscipline = async (event: ToolCallEvent, ctx: ExtensionContext): Promise<ToolCallEventResult | void> => {
+    const decision = await forwardToolCall(event, ctx, false);
 
     if (decision.block) {
       return { block: true, reason: decision.reason ?? "[Gortex] blocked: prefer graph tools." };
@@ -366,9 +398,43 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
   const graphToolsPossible = (): boolean =>
     gortexToolsReady(pi) || (!toolsSettled && toolsExpected);
   // Registered unconditionally, since a session's own sidecar can turn enforcement on.
-  pi.on("tool_call", (event, ctx) =>
-    config.enforce && graphToolsPossible() ? enforceReadDiscipline(event, ctx) : undefined,
-  );
+  pi.on("tool_call", (event, ctx) => {
+    if (!graphToolsPossible()) return;
+    if (config.enforce) return enforceReadDiscipline(event, ctx);
+    recordToolCall(event, ctx);
+  });
+
+  // Set while the run that is ending was the continuation the diagnostics asked for.
+  let postTaskContinued = false;
+
+  // Pi's last chance to continue before it settles: Gortex checks the work
+  // this session did, and its findings go to the model for one more request.
+  // An aborted or failed run never reaches here with "completed".
+  pi.on("agent_before_settle", async (event, ctx): Promise<AgentBeforeSettleEventResult | void> => {
+    const active = postTaskContinued;
+    postTaskContinued = false;
+    if (event.outcome !== "completed" || !graphToolsPossible()) return;
+    await Promise.allSettled(recording);
+    const decision = await callHook(config.hookArgv, deps, {
+      event: "stop",
+      cwd: ctx?.cwd ?? process.cwd(),
+      session_id: sessionIdOf(ctx),
+      last_assistant_message: lastAssistantText(event.context.contextMessages),
+      stop_hook_active: active,
+    }, ctx?.signal, STOP_HOOK_TIMEOUT_MS);
+    // Pi has no loop guard of its own, so a continuation never asks for another.
+    if (active) return;
+    const content = sanitize((decision.block ? decision.reason : decision.additional_context) ?? "").trim();
+    if (!content) return;
+    postTaskContinued = true;
+    return {
+      entries: [
+        ...event.entries,
+        { type: "custom_message", customType: POST_TASK_MESSAGE_TYPE, content, display: true, details: { blocked: decision.block === true } },
+      ],
+      continue: true,
+    };
+  });
 
   pi.on("tool_result", (event) => {
     const text = guidance.get(event.toolCallId);
@@ -390,5 +456,10 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
     (pi as Partial<Pick<ExtensionAPI, "registerToolRenderer">>).registerToolRenderer?.(gortexRenderers);
   } catch {
     // drawing diffs is optional
+  }
+  try {
+    pi.registerMessageRenderer(POST_TASK_MESSAGE_TYPE, renderPostTask);
+  } catch {
+    // Pi's default box draws it otherwise
   }
 }

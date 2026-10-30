@@ -30,6 +30,9 @@ and read discipline goes through `gortex hook`.
 - **Points each prompt at relevant code.** A prompt typed while Pi is idle is
   sent to Gortex, and the graph symbols it finds relevant ride the turn as a
   hidden message.
+- **Checks the work when the agent finishes.** Gortex's post-task diagnostics
+  (impact, tests, guards, contracts) for the files the session wrote go back
+  to the model for one more request, and show in the transcript.
 
 See [docs/architecture.md](docs/architecture.md) for how it works.
 
@@ -69,7 +72,7 @@ environment -> `<session cwd>/.pi/gortex.json` -> `<agent dir>/extensions/gortex
 |----------------|--------------------|--------------------|---------|
 | `bin`          | `GORTEX_BIN`       | `gortex` on `PATH` | The gortex binary. Read from the global sidecar only; a project file cannot set it. `~` expands, and a relative path resolves against the sidecar's directory (the launch directory for `GORTEX_BIN`). |
 | `hook_mode`    | `GORTEX_HOOK_MODE` | `deny`             | Posture: `deny`, `enrich`, `consult-unlock`, `nudge` (`adaptive-nudge` is an alias). |
-| `enforce`      | `GORTEX_ENFORCE`   | `true`             | `false` keeps the graph tools and the briefing, and wires no enforcement. |
+| `enforce`      | `GORTEX_ENFORCE`   | `true`             | `false` keeps the graph tools, the briefing and the post-task diagnostics, and wires no enforcement. Tool calls still reach Gortex, which only records the files they write. |
 | `tools_preset` | `GORTEX_TOOLS`     | daemon's default   | Eager MCP surface: a Gortex preset (`core`, `full`, `agent`, `edit`, `nav`, `readonly`, `localization`), optionally followed by comma-separated tool names and `+tool`/`-tool` changes, e.g. `nav,+edit_file`. A value that does not open with a preset is ignored. |
 
 ```json

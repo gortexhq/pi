@@ -2,8 +2,8 @@
 // the component Pi's interactive mode builds for every tool call, so a suite
 // reads the rows a user would see instead of calling a renderer by hand.
 
-import { ToolExecutionComponent, initTheme } from "@earendil-works/pi-coding-agent";
-import type { ToolDefinition, ToolRenderers } from "@earendil-works/pi-coding-agent";
+import { CustomMessageComponent, ToolExecutionComponent, initTheme } from "@earendil-works/pi-coding-agent";
+import type { MessageRenderer, ToolDefinition, ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import type { TUI } from "@earendil-works/pi-tui";
 
@@ -11,6 +11,20 @@ import type { TUI } from "@earendil-works/pi-tui";
 const ui = { requestRender() {} } as unknown as TUI;
 
 let themed = false;
+
+function theme(): void {
+  if (themed) return;
+  initTheme("dark");
+  themed = true;
+}
+
+/** visible strips a component's rows down to the text a user reads, without the box's padding. */
+function visible(rows: string[]): string {
+  return rows
+    .map((row) => stripTerminalSequences(row).trim())
+    .join("\n")
+    .replace(/^\n+|\n+$/g, "");
+}
 
 interface ToolResult {
   content: { type: string; text?: string }[];
@@ -57,12 +71,17 @@ export function draw(
   args: Record<string, unknown>,
   cwd: string,
 ): Drawing {
-  if (!themed) {
-    initTheme("dark");
-    themed = true;
-  }
+  theme();
   const component = new ToolExecutionComponent(name, "call", args, {}, renderers, ui, cwd);
   component.setArgsComplete();
   component.markExecutionStarted();
   return new Drawing(component);
+}
+
+/** drawMessage is the visible text of a custom message drawn the way Pi's transcript draws it. */
+export function drawMessage(message: Parameters<MessageRenderer>[0], renderer: MessageRenderer | undefined, expanded = false, width = 80): string {
+  theme();
+  const component = new CustomMessageComponent(message, renderer);
+  component.setExpanded(expanded);
+  return visible(component.render(width));
 }

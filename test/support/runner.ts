@@ -25,6 +25,8 @@ import {
   discoverAndLoadExtensions,
 } from "@earendil-works/pi-coding-agent";
 import type {
+  AgentActivityOutcome,
+  BoundaryContextPreview,
   Extension,
   ExtensionActions,
   ExtensionContextActions,
@@ -87,6 +89,14 @@ export interface Harness {
   compact(keepFrom?: string | null): Promise<unknown>;
   session: SessionManager;
   toolCall(toolName: string, input: Record<string, unknown>): Promise<ToolCallEventResult | undefined>;
+  /** Stores an assistant reply in the session, as the agent loop does when a model call ends. */
+  reply(text: string): void;
+  /**
+   * agent_before_settle, as Pi emits it when a run ends, with the drafts the
+   * handlers return committed to the session. `continued` is whether Pi would
+   * make one more model request.
+   */
+  settle(outcome?: AgentActivityOutcome): Promise<{ continued: boolean; valid: boolean }>;
   /** Aborts the signal handlers see on ctx.signal, as Esc does during a turn. */
   abort(): void;
   tools(): string[];
@@ -291,6 +301,40 @@ function buildHarness(
     },
     toolCall(toolName, input) {
       return runner.emitToolCall({ type: "tool_call", toolName, input } as Parameters<ExtensionRunner["emitToolCall"]>[0]);
+    },
+    reply(text) {
+      session.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text }],
+        api: "faux",
+        provider: "faux",
+        model: "faux",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      } as Parameters<SessionManager["appendMessage"]>[0]);
+    },
+    async settle(outcome = "completed") {
+      // As Pi does, the preview includes the drafts so far, and a model request
+      // can only follow a context that does not end on the assistant's reply.
+      const result = await runner.emitBoundary({ type: "agent_before_settle", outcome }, (drafts) => {
+        const contextMessages = [
+          ...session.buildSessionContext().messages,
+          ...drafts.filter((draft) => draft.type === "custom_message").map((draft) => ({ role: "custom", ...draft })),
+        ] as BoundaryContextPreview["contextMessages"];
+        return {
+          contextEntries: [],
+          contextMessages,
+          llmMessages: [],
+          pendingMessages: [],
+          canContinue: contextMessages.at(-1)?.role !== "assistant",
+        };
+      });
+      for (const draft of result.entries) {
+        if (draft.type !== "custom_message") continue;
+        session.appendCustomMessageEntry(draft.customType, draft.content, draft.display, draft.details);
+      }
+      return { continued: result.continue, valid: result.valid };
     },
     abort() {
       controller.abort();

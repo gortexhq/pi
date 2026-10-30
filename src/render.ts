@@ -1,16 +1,18 @@
 // How a gortex tool's result renders in Pi's TUI, layered over Pi's own MCP
 // renderer: an edit's diff drawn the way Pi draws its own edits, and the reply
-// stripped of terminal controls before it is drawn.
+// stripped of terminal controls before it is drawn. Also how the post-task
+// diagnostics message is drawn in the transcript.
 
 import { keyHint, renderDiff } from "@earendil-works/pi-coding-agent";
-import type { Theme, ToolRenderers } from "@earendil-works/pi-coding-agent";
-import { Container, Text } from "@earendil-works/pi-tui";
+import type { MessageRenderer, Theme, ToolRenderers } from "@earendil-works/pi-coding-agent";
+import { Box, Container, Text } from "@earendil-works/pi-tui";
 import type { Component } from "@earendil-works/pi-tui";
 
 import type { EditDetails } from "./diff.ts";
 import { isGortexTool } from "./mcp.ts";
 
 const NEW_FILE_PREVIEW_LINES = 10;
+const POST_TASK_PREVIEW_LINES = 6;
 
 // CSI, OSC and DCS/SOS/PM/APC sequences in their 7-bit and 8-bit forms
 // (terminated or not), other escapes, then the C0 and C1 controls except tab
@@ -129,3 +131,18 @@ export function gortexRenderers(toolName: string, next: () => ToolRenderers | un
     },
   };
 }
+
+/** renderPostTask draws the post-task diagnostics in Pi's custom message box, their first lines until expanded. */
+export const renderPostTask: MessageRenderer = (message, { expanded }, theme) => {
+  const content = message.content;
+  const text = typeof content === "string"
+    ? content
+    : content.map((c) => (c.type === "text" ? c.text : "")).filter(Boolean).join("\n");
+  const body = sanitize(text).trim().split("\n");
+  const shown = expanded ? body : body.slice(0, POST_TASK_PREVIEW_LINES);
+  const lines = [theme.fg("customMessageLabel", theme.bold("Gortex post-task diagnostics")), "", ...shown.map((line) => theme.fg("customMessageText", line))];
+  if (shown.length < body.length) lines.push(writeHint(theme, body.length - shown.length, body.length));
+  const box = new Box(1, 1, (t) => theme.bg("customMessageBg", t));
+  box.addChild(new Text(lines.join("\n"), 0, 0));
+  return box;
+};
