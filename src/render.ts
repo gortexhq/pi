@@ -1,16 +1,18 @@
 // How a gortex tool's result renders in Pi's TUI, layered over Pi's own MCP
 // renderer: an edit's diff drawn the way Pi draws its own edits, and the reply
-// stripped of terminal controls before it is drawn.
+// stripped of terminal controls before it is drawn. Also how the post-task
+// diagnostics message is drawn in the transcript.
 
-import { keyHint, renderDiff } from "@earendil-works/pi-coding-agent";
-import type { Theme, ToolRenderers } from "@earendil-works/pi-coding-agent";
-import { Container, Text } from "@earendil-works/pi-tui";
+import { getMarkdownTheme, keyHint, renderDiff } from "@earendil-works/pi-coding-agent";
+import type { MessageRenderer, Theme, ToolRenderers } from "@earendil-works/pi-coding-agent";
+import { Box, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import type { Component } from "@earendil-works/pi-tui";
 
 import type { EditDetails } from "./diff.ts";
 import { isGortexTool } from "./mcp.ts";
 
 const NEW_FILE_PREVIEW_LINES = 10;
+const POST_TASK_PREVIEW_LINES = 6;
 
 // CSI, OSC and DCS/SOS/PM/APC sequences in their 7-bit and 8-bit forms
 // (terminated or not), other escapes, then the C0 and C1 controls except tab
@@ -21,6 +23,12 @@ const TERMINAL_CONTROLS =
 /** sanitize keeps a daemon string from driving the terminal: carriage returns become newlines, controls go. */
 export function sanitize(text: string): string {
   return text.replace(/\r\n?/g, "\n").replace(TERMINAL_CONTROLS, "");
+}
+
+/** contentText joins the text parts of a message's content. */
+export function contentText(content: string | readonly { type: string; text?: string }[]): string {
+  if (typeof content === "string") return content;
+  return content.map((c) => (c.type === "text" ? c.text : "")).filter(Boolean).join("\n");
 }
 
 interface Drawn {
@@ -129,3 +137,19 @@ export function gortexRenderers(toolName: string, next: () => ToolRenderers | un
     },
   };
 }
+
+/**
+ * renderPostTask draws the post-task diagnostics as Markdown in Pi's custom
+ * message box, the way Pi draws a custom message itself, their first lines
+ * until expanded.
+ */
+export const renderPostTask: MessageRenderer = (message, { expanded }, theme) => {
+  const body = sanitize(contentText(message.content)).trim().split("\n");
+  const shown = expanded ? body : body.slice(0, POST_TASK_PREVIEW_LINES);
+  const box = new Box(1, 1, (t) => theme.bg("customMessageBg", t));
+  box.addChild(new Text(theme.fg("customMessageLabel", theme.bold("Gortex")), 0, 0));
+  box.addChild(new Spacer(1));
+  box.addChild(new Markdown(shown.join("\n"), 0, 0, getMarkdownTheme(), { color: (t) => theme.fg("customMessageText", t) }));
+  if (shown.length < body.length) box.addChild(new Text(writeHint(theme, body.length - shown.length, body.length), 0, 0));
+  return box;
+};

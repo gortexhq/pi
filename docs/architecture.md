@@ -88,6 +88,20 @@ behaviour identical across hosts. Once the first turn has waited for graph tools
 and found none, tool calls are not forwarded until some appear, since blocking
 Pi's reads there would leave nothing to use instead.
 
+With enforcement off, tool calls are still forwarded, marked record-only, so
+Gortex knows which files the session wrote. Their decisions are ignored.
+
+## Post-task diagnostics
+
+When a run completes, Gortex gets a stop with the agent's last reply, and its
+findings or its block reason go back as a displayed message from
+`agent_before_settle`, Pi's last boundary that can ask for one more model
+request. This matches Claude Code, where a Stop hook's context also continues
+the turn. Pi has no loop guard of its own, so the extension carries one: the
+stop after its own continuation is flagged to Gortex and never continues
+again. Aborted and failed runs skip the stop, and the stop waits for tool calls
+still being recorded, since the diagnostics are scoped by them.
+
 ## Orientation injection
 
 The session briefing is stored once in the session history as a hidden message,

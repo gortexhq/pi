@@ -93,8 +93,10 @@ describe("a session sidecar that sets enforcement", () => {
     writeSidecar(harness.cwd, { enforce: false });
     await harness.sessionStart();
     const before = control.hookCalls.length;
-    await harness.toolCall("read", { path: "src/a.ts" });
-    assert.equal(control.hookCalls.length, before);
+    control.hookDecision = { block: true, reason: "would block" };
+    assert.equal(await harness.toolCall("read", { path: "src/a.ts" }), undefined);
+    const forwarded = control.hookCalls.slice(before).map((call) => JSON.parse(call.input ?? "{}"));
+    assert.deepEqual(forwarded.map((envelope) => envelope.record_only), [true]);
     assert.deepEqual(harness.errors, []);
   });
 });

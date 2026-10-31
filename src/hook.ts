@@ -21,6 +21,12 @@ export interface PiEnvelope {
   session_id?: string;
   prompt?: string;
   is_gortex_tool?: boolean;
+  /** On a tool_call: Gortex only records the call, since enforcement is off. */
+  record_only?: boolean;
+  /** On a stop: the text of the agent's final reply. */
+  last_assistant_message?: string;
+  /** On a stop: the run that just ended was the continuation a stop asked for. */
+  stop_hook_active?: boolean;
 }
 
 const HOOK_EXEC_OPTS: ExecFileOpts = {
@@ -30,22 +36,29 @@ const HOOK_EXEC_OPTS: ExecFileOpts = {
 };
 
 /**
+ * A stop runs Gortex's post-task checks one after another, so it gets longer.
+ * Capped, since Esc cannot cut it short: Pi gives agent_before_settle no signal.
+ */
+export const STOP_HOOK_TIMEOUT_MS = 10_000;
+
+/**
  * callHook sends a normalized event envelope to `gortex hook --agent=pi` and
- * parses the PiDecision it writes back. Fail-open: any error, an aborted
- * `signal`, or a reply that is not a JSON object returns an empty decision, so
- * the extension never blocks Pi's flow on a hook hiccup (daemon down, parse
- * error, timeout).
+ * parses the PiDecision it writes back, within `timeout` ms. Fail-open: any
+ * error, an aborted `signal`, or a reply that is not a JSON object returns an
+ * empty decision, so the extension never blocks Pi's flow on a hook hiccup
+ * (daemon down, parse error, timeout).
  */
 export async function callHook(
   argv: string[],
   deps: ProcessDeps,
   envelope: PiEnvelope,
   signal?: AbortSignal,
+  timeout = HOOK_EXEC_OPTS.timeout,
 ): Promise<PiDecision> {
   const [bin, ...args] = argv;
   if (!bin) return {};
   try {
-    const out = (await deps.execFile(bin, args, { ...HOOK_EXEC_OPTS, input: JSON.stringify(envelope), signal })).trim();
+    const out = (await deps.execFile(bin, args, { ...HOOK_EXEC_OPTS, timeout, input: JSON.stringify(envelope), signal })).trim();
     if (!out) return {};
     const decision: unknown = JSON.parse(out);
     return typeof decision === "object" && decision !== null && !Array.isArray(decision) ? (decision as PiDecision) : {};
