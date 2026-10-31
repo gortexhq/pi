@@ -3,9 +3,9 @@
 // stripped of terminal controls before it is drawn. Also how the post-task
 // diagnostics message is drawn in the transcript.
 
-import { keyHint, renderDiff } from "@earendil-works/pi-coding-agent";
+import { getMarkdownTheme, keyHint, renderDiff } from "@earendil-works/pi-coding-agent";
 import type { MessageRenderer, Theme, ToolRenderers } from "@earendil-works/pi-coding-agent";
-import { Box, Container, Text } from "@earendil-works/pi-tui";
+import { Box, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import type { Component } from "@earendil-works/pi-tui";
 
 import type { EditDetails } from "./diff.ts";
@@ -132,7 +132,11 @@ export function gortexRenderers(toolName: string, next: () => ToolRenderers | un
   };
 }
 
-/** renderPostTask draws the post-task diagnostics in Pi's custom message box, their first lines until expanded. */
+/**
+ * renderPostTask draws the post-task diagnostics as Markdown in Pi's custom
+ * message box, the way Pi draws a custom message itself, their first lines
+ * until expanded.
+ */
 export const renderPostTask: MessageRenderer = (message, { expanded }, theme) => {
   const content = message.content;
   const text = typeof content === "string"
@@ -140,9 +144,10 @@ export const renderPostTask: MessageRenderer = (message, { expanded }, theme) =>
     : content.map((c) => (c.type === "text" ? c.text : "")).filter(Boolean).join("\n");
   const body = sanitize(text).trim().split("\n");
   const shown = expanded ? body : body.slice(0, POST_TASK_PREVIEW_LINES);
-  const lines = [theme.fg("customMessageLabel", theme.bold("Gortex post-task diagnostics")), "", ...shown.map((line) => theme.fg("customMessageText", line))];
-  if (shown.length < body.length) lines.push(writeHint(theme, body.length - shown.length, body.length));
   const box = new Box(1, 1, (t) => theme.bg("customMessageBg", t));
-  box.addChild(new Text(lines.join("\n"), 0, 0));
+  box.addChild(new Text(theme.fg("customMessageLabel", theme.bold("Gortex")), 0, 0));
+  box.addChild(new Spacer(1));
+  box.addChild(new Markdown(shown.join("\n"), 0, 0, getMarkdownTheme(), { color: (t) => theme.fg("customMessageText", t) }));
+  if (shown.length < body.length) box.addChild(new Text(writeHint(theme, body.length - shown.length, body.length), 0, 0));
   return box;
 };

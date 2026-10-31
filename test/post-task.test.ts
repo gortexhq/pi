@@ -25,6 +25,13 @@ after(assertNoRunnerErrors);
 const DIAGNOSTICS = "## Gortex Post-Task Diagnostics\nYour edits this session: 2 symbol(s) across 1 file(s)";
 const CLAIM = "[Gortex claim_check] the answer names src/auth.ts:10 without evidence.";
 const REPLY = "Fixed the redirect in src/auth.ts.";
+const DIAGNOSTICS_MARKDOWN = [
+  "## Gortex Post-Task Diagnostics",
+  "",
+  "**Your edits this session:** 2 symbol(s) across 1 file(s) in `/repo` — risk `HIGH`.",
+  "",
+  "_Run the tests above and resolve any flagged item in your own changes before handoff._",
+].join("\n");
 
 function envelopes(event: string, calls: HookCall[] = control.hookCalls): Record<string, unknown>[] {
   return calls
@@ -205,11 +212,19 @@ describe("the diagnostics in the transcript", () => {
     harness = await connectedSession();
   });
 
-  it("shows the first lines under a title until expanded", () => {
+  it("shows the first lines under a label until expanded", () => {
     const text = drawMessage(message(lines.join("\n")), harness.runner.getMessageRenderer("gortex-post-task"));
-    assert.match(text, /^Gortex post-task diagnostics\n\n- finding 1\n/);
-    assert.match(text, /- finding 6\n\.\.\. \(4 more lines, 10 total,/);
+    assert.match(text, /^Gortex\n\n\S+ finding 1\n/);
+    assert.match(text, /finding 6\n+\.\.\. \(4 more lines, 10 total,/);
     assert.doesNotMatch(text, /finding 7/);
+  });
+
+  it("renders Gortex's Markdown instead of showing its syntax", () => {
+    const text = drawMessage(message(DIAGNOSTICS_MARKDOWN), harness.runner.getMessageRenderer("gortex-post-task"), true);
+    assert.match(text, /Gortex Post-Task Diagnostics/);
+    assert.match(text, /Your edits this session: 2 symbol\(s\)/);
+    assert.match(text, /Run the tests above/);
+    assert.doesNotMatch(text, /##|\*\*|_Run/);
   });
 
   it("shows everything once expanded", () => {
