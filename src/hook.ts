@@ -35,8 +35,11 @@ const HOOK_EXEC_OPTS: ExecFileOpts = {
   windowsHide: true,
 };
 
-/** A stop runs Gortex's post-task checks one after another, so it gets longer. */
-export const STOP_HOOK_TIMEOUT_MS = 30_000;
+/**
+ * A stop runs Gortex's post-task checks one after another, so it gets longer.
+ * Capped, since Esc cannot cut it short: Pi gives agent_before_settle no signal.
+ */
+export const STOP_HOOK_TIMEOUT_MS = 10_000;
 
 /**
  * callHook sends a normalized event envelope to `gortex hook --agent=pi` and

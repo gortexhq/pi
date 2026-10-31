@@ -255,7 +255,6 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
   // stored in the session after the prompt, so every later LLM call carries it
   // and the system prompt, which prefix caching keys on, stays untouched.
   pi.on("before_agent_start", async (_event, ctx): Promise<BeforeAgentStartEventResult | void> => {
-    postTaskContinued = false;
     const requested = pendingHints;
     pendingHints = undefined;
     if (startupHookRan) {
@@ -369,12 +368,11 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
     }, ctx?.signal);
   };
 
-  // Records still in flight, which the post-task diagnostics wait for.
-  const recording = new Set<Promise<unknown>>();
+  // Records run one at a time, since Gortex rewrites the session's state for
+  // each, and the post-task diagnostics wait for the last.
+  let recorded: Promise<unknown> = Promise.resolve();
   const recordToolCall = (event: ToolCallEvent, ctx: ExtensionContext): void => {
-    const record = forwardToolCall(event, ctx, true);
-    recording.add(record);
-    void record.finally(() => recording.delete(record));
+    recorded = recorded.then(() => forwardToolCall(event, ctx, true));
   };
 
   const enforceReadDiscipline = async (event: ToolCallEvent, ctx: ExtensionContext): Promise<ToolCallEventResult | void> => {
@@ -412,7 +410,7 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
     const active = postTaskContinued;
     postTaskContinued = false;
     if (event.outcome !== "completed" || !graphToolsPossible()) return;
-    await Promise.allSettled(recording);
+    await recorded;
     const decision = await callHook(config.hookArgv, deps, {
       event: "stop",
       cwd: ctx?.cwd ?? process.cwd(),
@@ -432,6 +430,10 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
       ],
       continue: true,
     };
+  });
+  // Pi will not continue past here, whether or not it ran the continuation.
+  pi.on("agent_settled", () => {
+    postTaskContinued = false;
   });
 
   pi.on("tool_result", (event) => {

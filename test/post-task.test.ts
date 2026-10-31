@@ -140,13 +140,30 @@ describe("a run that did not complete", () => {
   }
 });
 
-describe("a prompt after a continuation that never settled", () => {
-  it("sends its stop as a fresh one", async () => {
+describe("a continuation that never ran", () => {
+  it("leaves the next run's stop a fresh one when it was aborted", async () => {
     const harness = await connectedSession();
     await answered(harness);
     await harness.settle();
-    // The continuation was aborted, so no settle saw it end.
+    // Esc during the continuation: no settle sees it end, but Pi still settles.
+    await harness.settled();
     await answered(harness);
+    await harness.settle();
+    assert.deepEqual(envelopes("stop").map((e) => e.stop_hook_active), [false, false]);
+  });
+
+  it("leaves the next run's stop a fresh one when another extension cancelled it", async () => {
+    const gortex = withConnectedTools(await loadFactory(0));
+    const harness = await gortexSession((pi, opts) => {
+      gortex(pi, opts);
+      pi.on("agent_before_settle", () => ({ continue: false }));
+    });
+    control.hookDecisions = { stop: { additional_context: DIAGNOSTICS } };
+    await answered(harness);
+    assert.equal((await harness.settle()).continued, false);
+    await harness.settled();
+    // A run Pi starts without a prompt, such as a message sent with triggerTurn.
+    harness.reply("Another reply.");
     await harness.settle();
     assert.deepEqual(envelopes("stop").map((e) => e.stop_hook_active), [false, false]);
   });
@@ -192,6 +209,22 @@ describe("tool calls the diagnostics are scoped by", () => {
     assert.deepEqual(envelopes("stop"), []);
     held.open();
     await settling;
+    assert.equal(envelopes("stop").length, 1);
+  });
+
+  it("are recorded one at a time, since each rewrites the session's state", async () => {
+    const harness = await connectedSession({ ...CONFIG, enforce: false });
+    await answered(harness);
+    const held = gate();
+    control.hookGate = held.promise;
+    await harness.toolCall("edit", { path: "src/a.ts" });
+    await harness.toolCall("edit", { path: "src/b.ts" });
+    await new Promise((r) => setImmediate(r));
+    assert.equal(envelopes("tool_call").length, 1);
+    held.open();
+    await harness.settle();
+    const paths = envelopes("tool_call").map((e) => (e.tool_input as { file_path?: string }).file_path);
+    assert.deepEqual(paths, ["src/a.ts", "src/b.ts"]);
     assert.equal(envelopes("stop").length, 1);
   });
 });

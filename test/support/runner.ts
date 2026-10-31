@@ -97,6 +97,8 @@ export interface Harness {
    * make one more model request.
    */
   settle(outcome?: AgentActivityOutcome): Promise<{ continued: boolean; valid: boolean }>;
+  /** agent_settled, as Pi emits it once a run ends and nothing will continue it. */
+  settled(): Promise<unknown>;
   /** Aborts the signal handlers see on ctx.signal, as Esc does during a turn. */
   abort(): void;
   tools(): string[];
@@ -335,6 +337,9 @@ function buildHarness(
         session.appendCustomMessageEntry(draft.customType, draft.content, draft.display, draft.details);
       }
       return { continued: result.continue, valid: result.valid };
+    },
+    settled() {
+      return runner.emit({ type: "agent_settled" } as Parameters<ExtensionRunner["emit"]>[0]);
     },
     abort() {
       controller.abort();
