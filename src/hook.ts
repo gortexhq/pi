@@ -41,9 +41,9 @@ export const STOP_HOOK_TIMEOUT_MS = 30_000;
 /**
  * callHook sends a normalized event envelope to `gortex hook --agent=pi` and
  * parses the PiDecision it writes back, within `timeout` ms. Fail-open: any
- * error, an aborted `signal`, or a reply that is not a JSON object returns an empty decision, so
- * the extension never blocks Pi's flow on a hook hiccup (daemon down, parse
- * error, timeout).
+ * error, an aborted `signal`, or a reply that is not a JSON object returns an
+ * empty decision, so the extension never blocks Pi's flow on a hook hiccup
+ * (daemon down, parse error, timeout).
  */
 export async function callHook(
   argv: string[],

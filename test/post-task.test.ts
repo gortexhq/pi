@@ -207,20 +207,22 @@ describe("the diagnostics in the transcript", () => {
     details: { blocked: false },
     timestamp: 0,
   });
+  const draw = (content: string, expanded = false) =>
+    drawMessage(message(content), harness.runner.getMessageRenderer("gortex-post-task"), expanded);
 
   before(async () => {
     harness = await connectedSession();
   });
 
   it("shows the first lines under a label until expanded", () => {
-    const text = drawMessage(message(lines.join("\n")), harness.runner.getMessageRenderer("gortex-post-task"));
+    const text = draw(lines.join("\n"));
     assert.match(text, /^Gortex\n\n\S+ finding 1\n/);
     assert.match(text, /finding 6\n+\.\.\. \(4 more lines, 10 total,/);
     assert.doesNotMatch(text, /finding 7/);
   });
 
   it("renders Gortex's Markdown instead of showing its syntax", () => {
-    const text = drawMessage(message(DIAGNOSTICS_MARKDOWN), harness.runner.getMessageRenderer("gortex-post-task"), true);
+    const text = draw(DIAGNOSTICS_MARKDOWN, true);
     assert.match(text, /Gortex Post-Task Diagnostics/);
     assert.match(text, /Your edits this session: 2 symbol\(s\)/);
     assert.match(text, /Run the tests above/);
@@ -228,13 +230,13 @@ describe("the diagnostics in the transcript", () => {
   });
 
   it("shows everything once expanded", () => {
-    const text = drawMessage(message(lines.join("\n")), harness.runner.getMessageRenderer("gortex-post-task"), true);
+    const text = draw(lines.join("\n"), true);
     assert.match(text, /- finding 10$/);
     assert.doesNotMatch(text, /more lines/);
   });
 
   it("strips terminal controls the daemon text carries", () => {
-    const text = drawMessage(message("ok\x1b]0;PWNED\x07 then\x1b[2J done"), harness.runner.getMessageRenderer("gortex-post-task"));
+    const text = draw("ok\x1b]0;PWNED\x07 then\x1b[2J done");
     assert.match(text, /ok then done/);
     assert.doesNotMatch(text, /PWNED/);
   });

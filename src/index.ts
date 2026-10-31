@@ -30,7 +30,7 @@ import {
   supportsMcp,
   waitForGortexTools,
 } from "./mcp.ts";
-import { gortexRenderers, renderPostTask, sanitize } from "./render.ts";
+import { contentText, gortexRenderers, renderPostTask, sanitize } from "./render.ts";
 import { nodeProcessDeps } from "./runtime.ts";
 import type { ProcessDeps } from "./runtime.ts";
 
@@ -137,8 +137,7 @@ const sessionIdOf = (ctx: ExtensionContext | undefined): string => ctx?.sessionM
 function lastAssistantText(messages: BoundaryContextPreview["contextMessages"]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
-    if (message?.role !== "assistant") continue;
-    return message.content.map((c) => (c.type === "text" ? c.text : "")).filter(Boolean).join("\n");
+    if (message?.role === "assistant") return contentText(message.content);
   }
   return "";
 }
@@ -194,6 +193,8 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
   // Gortex's symbol hints for the prompt about to run, requested on `input`,
   // where the text is still the line the user typed.
   let pendingHints: Promise<string> | undefined;
+  // Set while the run that is ending was the continuation the diagnostics asked for.
+  let postTaskContinued = false;
 
   // Settles once session_start has run on this instance. Armed at factory
   // time, because every session builds a fresh instance before its
@@ -403,9 +404,6 @@ export default function gortexExtension(pi: ExtensionAPI, options: GortexExtensi
     if (config.enforce) return enforceReadDiscipline(event, ctx);
     recordToolCall(event, ctx);
   });
-
-  // Set while the run that is ending was the continuation the diagnostics asked for.
-  let postTaskContinued = false;
 
   // Pi's last chance to continue before it settles: Gortex checks the work
   // this session did, and its findings go to the model for one more request.

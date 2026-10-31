@@ -25,6 +25,12 @@ export function sanitize(text: string): string {
   return text.replace(/\r\n?/g, "\n").replace(TERMINAL_CONTROLS, "");
 }
 
+/** contentText joins the text parts of a message's content. */
+export function contentText(content: string | readonly { type: string; text?: string }[]): string {
+  if (typeof content === "string") return content;
+  return content.map((c) => (c.type === "text" ? c.text : "")).filter(Boolean).join("\n");
+}
+
 interface Drawn {
   stamp: string;
   parts?: DiffPart[];
@@ -138,11 +144,7 @@ export function gortexRenderers(toolName: string, next: () => ToolRenderers | un
  * until expanded.
  */
 export const renderPostTask: MessageRenderer = (message, { expanded }, theme) => {
-  const content = message.content;
-  const text = typeof content === "string"
-    ? content
-    : content.map((c) => (c.type === "text" ? c.text : "")).filter(Boolean).join("\n");
-  const body = sanitize(text).trim().split("\n");
+  const body = sanitize(contentText(message.content)).trim().split("\n");
   const shown = expanded ? body : body.slice(0, POST_TASK_PREVIEW_LINES);
   const box = new Box(1, 1, (t) => theme.bg("customMessageBg", t));
   box.addChild(new Text(theme.fg("customMessageLabel", theme.bold("Gortex")), 0, 0));
