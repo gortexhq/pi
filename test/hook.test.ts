@@ -263,6 +263,17 @@ describe("soft guidance", () => {
     assert.equal(await finish("blocked", "read"), undefined);
   });
 
+  // A daemon outage fails the graph call, and Gortex explains why on that call.
+  it("joins a failed call's result", async () => {
+    control.reset({ hookDecision: { additional_context: "[Gortex] daemon unreachable" } });
+    await start("down", "mcp__gortex__search", {});
+    const result = await finish("down", "mcp__gortex__search", { isError: true });
+    assert.deepEqual(result?.content, [
+      { type: "text", text: "package main" },
+      { type: "text", text: "[Gortex] daemon unreachable" },
+    ]);
+  });
+
   it("keeps the structured content of the result it joins", async () => {
     control.reset({ hookDecision: { additional_context: "advice" } });
     await start("mcp", "mcp__gortex__read", {});
